@@ -40,6 +40,41 @@ AD_PACKAGES=(
 
 tv() { "$ADB" -s "$TV_IP:5555" shell "$@"; }
 
+# Colors only when printing to a terminal.
+if [[ -t 1 ]]; then
+  C1=$'\033[1;36m' C2=$'\033[1;35m' C3=$'\033[1;33m' C4=$'\033[1;32m' R=$'\033[0m'
+else
+  C1='' C2='' C3='' C4='' R=''
+fi
+
+banner() {
+  cat <<EOF
+${C2}            \\   /
+             \\ /${R}
+${C1}    .=====================.
+    |  ${C3}.---------------.${C1}  |
+    |  ${C3}|${R}  NO MORE ADS  ${C3}|${C1}  |
+    |  ${C3}|${R}  FAST TV MODE ${C3}|${C1}  |
+    |  ${C3}'---------------'${C1}  |
+    '====================='
+         _|_       _|_${R}
+${C2}     TV Ad Blocker & Speed-Up${R}
+
+EOF
+}
+
+celebrate() {
+  cat <<EOF
+
+${C3}      *    .  *       .   *    *${R}
+${C4}     \\o/  ALL DONE!  Your TV is faster!  \\o/${R}
+${C3}    *   .    *    .     *   .     *${R}
+
+EOF
+}
+
+banner
+
 echo "Connecting to $TV_IP ... (accept the prompt on the TV if one appears)"
 "$ADB" connect "$TV_IP:5555" >/dev/null
 "$ADB" -s "$TV_IP:5555" wait-for-device
@@ -78,5 +113,5 @@ echo
 echo "Apps you installed (uninstall any you don't use to free memory):"
 tv pm list packages -3 | sed 's/^package:/  /' | sort
 
-echo
+celebrate
 echo "Done. Restart the TV now: unplug it for 60 seconds, then plug it back in."

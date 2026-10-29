@@ -72,7 +72,10 @@ Everything it changes can be undone. It deletes nothing.
 
 ### Turn on network debugging on the TV
 
-- **Google TV / Android TV:** Settings > System > About > click **Android TV OS build** 7 times. Then Settings > System > Developer options > turn on **USB debugging** (and **Network debugging** if listed).
+- **Google TV:** Settings > System > About > click **Android TV OS build** 7 times. Then Settings > System > Developer options > turn on **USB debugging** (and **Network debugging** if listed).
+- **Android TV (older models, e.g. Hisense):** Settings > Device Preferences > About > click **Build** 7 times. Then Settings > Device Preferences > Developer options > turn on **USB debugging**.
+
+> **No computer?** You can set the animation speeds yourself in Developer options: set **Window animation scale**, **Transition animation scale**, and **Animator duration scale** to **0.5x**.
 - **Fire TV:** Settings > My Fire TV > About > click **your device name** 7 times. Then Settings > My Fire TV > Developer Options > turn on **ADB Debugging**.
 
 Find the TV's IP address under Settings > Network.

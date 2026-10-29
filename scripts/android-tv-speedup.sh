@@ -6,7 +6,8 @@
 #   ./android-tv-speedup.sh <tv-ip-address> --undo   put everything back
 #
 # Before running: turn on Developer options and "Network debugging" /
-# "ADB debugging" on the TV (see README.md), and install adb on your computer.
+# "ADB debugging" on the TV (see README.md), and unzip Android platform-tools
+# into this folder (or install adb another way).
 set -euo pipefail
 
 TV_IP="${1:-}"
@@ -17,8 +18,14 @@ if [[ -z "$TV_IP" ]]; then
   exit 1
 fi
 
-if ! command -v adb >/dev/null 2>&1; then
-  echo "adb is not installed. Install 'Android platform-tools' first." >&2
+# Find adb: on the PATH, or in a platform-tools folder next to this script.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if command -v adb >/dev/null 2>&1; then
+  ADB=adb
+elif [[ -x "$SCRIPT_DIR/platform-tools/adb" ]]; then
+  ADB="$SCRIPT_DIR/platform-tools/adb"
+else
+  echo "adb was not found. Download Android platform-tools and unzip it into: $SCRIPT_DIR" >&2
   exit 1
 fi
 
@@ -31,11 +38,11 @@ AD_PACKAGES=(
   com.amazon.ags.app                                # Fire TV GameCircle
 )
 
-tv() { adb -s "$TV_IP:5555" shell "$@"; }
+tv() { "$ADB" -s "$TV_IP:5555" shell "$@"; }
 
 echo "Connecting to $TV_IP ... (accept the prompt on the TV if one appears)"
-adb connect "$TV_IP:5555" >/dev/null
-adb -s "$TV_IP:5555" wait-for-device
+"$ADB" connect "$TV_IP:5555" >/dev/null
+"$ADB" -s "$TV_IP:5555" wait-for-device
 
 installed="$(tv pm list packages)"
 

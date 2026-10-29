@@ -88,18 +88,20 @@ Find the TV's IP address under Settings > Network.
 2. Right-click `scripts/android-tv-speedup.ps1` and choose **Run with PowerShell**.
 3. Type your TV's IP address, then type **1** to speed it up (or **2** to undo).
 
-**Mac / Linux:** on a computer on the same Wi-Fi, install [Android platform-tools](https://developer.android.com/tools/releases/platform-tools) (it includes `adb`), then:
+**Mac / Linux:**
 
-```bash
-./scripts/android-tv-speedup.sh 192.168.1.50          # use your TV's IP
-```
+1. Download [Android platform-tools](https://developer.android.com/tools/releases/platform-tools) for your system and unzip it into the `scripts` folder.
+2. Open Terminal in this folder and run (use your TV's IP):
+   ```bash
+   bash scripts/android-tv-speedup.sh 192.168.1.50
+   ```
 
 A prompt appears on the TV the first time. Choose **Allow**.
 
 To undo everything:
 
 ```bash
-./scripts/android-tv-speedup.sh 192.168.1.50 --undo
+bash scripts/android-tv-speedup.sh 192.168.1.50 --undo
 ```
 
 When you are done, turn **USB/ADB debugging** back off on the TV.

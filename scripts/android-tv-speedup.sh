@@ -43,8 +43,9 @@ tv() { "$ADB" -s "$TV_IP:5555" shell "$@"; }
 # Colors only when printing to a terminal.
 if [[ -t 1 ]]; then
   C1=$'\033[1;36m' C2=$'\033[1;35m' C3=$'\033[1;33m' C4=$'\033[1;32m' R=$'\033[0m'
+  SCREEN=$'\033[1;97;44m'  # bright white text on a blue background
 else
-  C1='' C2='' C3='' C4='' R=''
+  C1='' C2='' C3='' C4='' R='' SCREEN=''
 fi
 
 banner() {
@@ -53,8 +54,8 @@ ${C2}            \\   /
              \\ /${R}
 ${C1}    .=====================.
     |  ${C3}.---------------.${C1}  |
-    |  ${C3}|${R}  NO MORE ADS  ${C3}|${C1}  |
-    |  ${C3}|${R}  FAST TV MODE ${C3}|${C1}  |
+    |  ${C3}|${SCREEN}  NO MORE ADS  ${R}${C3}|${C1}  |
+    |  ${C3}|${SCREEN}  FAST TV MODE ${R}${C3}|${C1}  |
     |  ${C3}'---------------'${C1}  |
     '====================='
          _|_       _|_${R}

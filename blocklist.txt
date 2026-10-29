@@ -1,0 +1,39 @@
+! Title: Smart TV ad and tracking blocklist
+! Description: Blocks home-screen ads, banner ads, and viewing trackers (ACR)
+!              on common smart TVs. Works with AdGuard Home, Pi-hole v6, and
+!              any blocker that reads adblock-style rules.
+! Format: ||domain^ blocks the domain and all of its subdomains.
+!
+! Not blocked on purpose: firmware updates, app stores, and streaming
+! services. Blocking those breaks the TV.
+
+! --- Samsung ---
+||samsungads.com^
+||samsungacr.com^
+||samsungcloudsolution.com^
+||samsung-com.112.2o7.net^
+
+! --- LG ---
+||lgsmartad.com^
+||lgad.cjpowercast.com^
+
+! --- Roku ---
+||ads.roku.com^
+||logs.roku.com^
+
+! --- Vizio (Inscape viewing data) ---
+||tvinteractive.tv^
+
+! --- Amazon Fire TV ---
+||amazon-adsystem.com^
+||device-metrics-us.amazon.com^
+||device-metrics-us-2.amazon.com^
+
+! --- Google / Android TV ad networks ---
+||doubleclick.net^
+||googlesyndication.com^
+||googleadservices.com^
+
+! --- Viewing trackers used by many brands (ACR) ---
+||alphonso.tv^
+||samba.tv^

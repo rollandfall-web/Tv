@@ -1,0 +1,16 @@
+# AdGuard Home: a network-wide ad blocker.
+# Run it on any always-on computer (PC, Raspberry Pi, NAS) on your home network,
+# then point your TV's DNS at that computer. See README.md.
+services:
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: tv-adblock
+    restart: unless-stopped
+    ports:
+      - "53:53/tcp"     # DNS
+      - "53:53/udp"     # DNS
+      - "3000:3000/tcp" # First-time setup page
+      - "8080:80/tcp"   # Dashboard after setup
+    volumes:
+      - ./work:/opt/adguardhome/work
+      - ./conf:/opt/adguardhome/conf

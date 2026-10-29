@@ -82,7 +82,13 @@ Find the TV's IP address under Settings > Network.
 
 ### Run it
 
-On a computer on the same Wi-Fi, install [Android platform-tools](https://developer.android.com/tools/releases/platform-tools) (it includes `adb`), then:
+**Windows:**
+
+1. Download [Android platform-tools for Windows](https://developer.android.com/tools/releases/platform-tools) and unzip it into the `scripts` folder.
+2. Right-click `scripts/android-tv-speedup.ps1` and choose **Run with PowerShell**.
+3. Type your TV's IP address, then type **1** to speed it up (or **2** to undo).
+
+**Mac / Linux:** on a computer on the same Wi-Fi, install [Android platform-tools](https://developer.android.com/tools/releases/platform-tools) (it includes `adb`), then:
 
 ```bash
 ./scripts/android-tv-speedup.sh 192.168.1.50          # use your TV's IP

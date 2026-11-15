@@ -115,3 +115,4 @@ When you are done, turn **USB/ADB debugging** back off on the TV.
 | `blocklist.txt` | List of ad and tracker addresses for Samsung, LG, Roku, Vizio, Fire TV and Google TV. |
 | `adguard/docker-compose.yml` | Starts the AdGuard Home ad blocker. |
 | `scripts/android-tv-speedup.sh` | Speed-up script for Android TV, Google TV, and Fire TV. |
+| `clipper/clip.py` | YouTube clip maker. See [`clipper/README.md`](clipper/README.md). |

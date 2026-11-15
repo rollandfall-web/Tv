@@ -141,11 +141,18 @@ def loudness_curve(media, ffmpeg):
     return [rank[v] for v in levels]
 
 
-def download_audio(source, ytdlp, ffmpeg, workdir):
+def download_audio(source, ytdlp, ffmpeg, workdir, progress=None):
     out = os.path.join(workdir, "audio.%(ext)s")
-    subprocess.run(ytdlp + ["--no-playlist", "--quiet", "--no-warnings", "-f", "ba/b",
-                            "--ffmpeg-location", ffmpeg, "-o", out, source],
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    cmd = ytdlp + ["--no-playlist", "--no-warnings", "--newline", "-f", "ba/b",
+                   "--ffmpeg-location", ffmpeg, "-o", out, source]
+    if progress:
+        import clip
+        try:
+            clip.run_progress(cmd, progress)
+        except (RuntimeError, SystemExit):
+            pass
+    else:
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     found = glob.glob(os.path.join(workdir, "audio.*"))
     return found[0] if found else None
 
@@ -219,7 +226,7 @@ def damp_edges(curve, duration):
     return [v / top for v in out]
 
 
-def signal_clips(curve, label, duration, count, min_len, max_len, cues):
+def signal_clips(curve, label, duration, count, min_len, max_len, cues, words=None):
     """Free mode: grow a clip around each peak of the curve.
 
     Starting at the highest point, the clip widens while the curve stays
@@ -248,7 +255,7 @@ def signal_clips(curve, label, duration, count, min_len, max_len, cues):
             start = max(0.0, start - extra / 2)
             end = min(float(duration), start + min_len)
             start = max(0.0, end - min_len)
-        start, end = snap(start, end, cues, min_len, max_len)
+        start, end = edge_snap(start, end, cues, words, min_len, max_len)
         end = min(end, float(duration))
         if any(overlaps((start, end), (c["start"], c["end"]), 0) for c in out):
             for i in range(int(start), min(n, int(end) + 1)):
@@ -322,17 +329,22 @@ Clips must not overlap. The reason is one short sentence a creator would find us
 The title is a short, catchy title for the clip (under 60 characters)."""
 
 
-def claude_clips(cues, curve, title, count, min_len, max_len):
+def claude_clips(cues, curve, title, count, min_len, max_len, focus=""):
     """Ask Claude to choose clips from the transcript. Returns list or raises."""
     import anthropic  # imported here so free mode works without it
 
     client = anthropic.Anthropic()
+    wish = (f"The creator wants clips about: {focus}\nStrongly prefer moments that match "
+            "this. If only a few match, return fewer clips rather than unrelated ones, and "
+            "say in the reason how each clip matches.\n" if focus else "")
     prompt = (
         f"Video title: {title}\n\n"
         f"Pick the {count} best clips, each between {min_len:.0f} and {max_len:.0f} seconds long.\n"
+        f"{wish}"
         f"{heatmap_summary(curve)}\n"
         "Most-replayed peaks are a strong hint of what viewers liked; prefer clips that "
-        "cover them when the transcript there is good.\n\n"
+        "cover them when the transcript there is good.\n"
+        "Every clip must start at the beginning of a sentence and end at the end of one.\n\n"
         f"<transcript>\n{transcript_text(cues)}\n</transcript>"
     )
     response = client.beta.messages.create(
@@ -353,48 +365,210 @@ def claude_clips(cues, curve, title, count, min_len, max_len):
     return json.loads(text)["clips"]
 
 
+def edge_snap(start, end, cues, words, min_len, max_len):
+    """Cut on whole sentences when we have word timings, else on caption lines."""
+    if words:
+        import captions
+        s, e, _ = captions.sentence_snap(start, end, words, min_len * 0.8, max_len)
+        return s, e
+    return snap(start, end, cues, min_len, max_len)
+
+
+# ---------------------------------------------------------------- free local AI (Ollama)
+
+OLLAMA = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+if not OLLAMA.startswith("http"):
+    OLLAMA = "http://" + OLLAMA
+LOCAL_MODEL = os.environ.get("CLIPMAKER_LOCAL_MODEL", "llama3.2")
+LOCAL_HINT = ("For smarter free picks, install Ollama (ollama.com), then in Terminal run:  "
+              f"ollama pull {LOCAL_MODEL}")
+
+
+def _ollama(path, body=None, timeout=120):
+    import urllib.request
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # it's local
+    req = urllib.request.Request(OLLAMA + path, method="POST" if body else "GET",
+                                 data=json.dumps(body).encode() if body else None,
+                                 headers={"Content-Type": "application/json"})
+    with opener.open(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+def local_ai_status():
+    """(ready, note). Ready when Ollama runs and has the model."""
+    try:
+        names = [m.get("name", "") for m in _ollama("/api/tags", timeout=1.5).get("models", [])]
+    except Exception:
+        return False, None
+    if any(n == LOCAL_MODEL or n.startswith(LOCAL_MODEL + ":") for n in names):
+        return True, None
+    return False, f"Ollama is running but doesn't have the model yet. In Terminal run:  ollama pull {LOCAL_MODEL}"
+
+
+RATE_SCHEMA = {
+    "type": "object",
+    "properties": {"hook": {"type": "integer"}, "standalone": {"type": "integer"},
+                   "payoff": {"type": "integer"}, "focus_match": {"type": "integer"},
+                   "title": {"type": "string"}, "reason": {"type": "string"}},
+    "required": ["hook", "standalone", "payoff", "focus_match", "title", "reason"],
+}
+
+RATE_PROMPT = """You rate short video clips for YouTube Shorts / TikTok from their transcript.
+Score each from 0 to 10, honestly (most clips are 3-7):
+- hook: do the first words make a viewer stop scrolling?
+- standalone: does it make sense without the rest of the video?
+- payoff: does it end on a punchline, reveal, useful tip or emotional peak?
+- focus_match: how well it matches what the creator asked for (10 if nothing was asked).
+title: a short catchy title under 60 characters. reason: one short sentence."""
+
+
+def local_rate(text, title, focus):
+    body = {"model": LOCAL_MODEL, "stream": False, "format": RATE_SCHEMA,
+            "options": {"temperature": 0.2, "num_ctx": 4096},
+            "messages": [{"role": "system", "content": RATE_PROMPT},
+                         {"role": "user", "content":
+                          f"Video: {title}\nThe creator wants: {focus or 'the best moments'}\n\n"
+                          f"Clip transcript:\n{text[:3000]}"}]}
+    out = json.loads(_ollama("/api/chat", body)["message"]["content"])
+    clamp = lambda v: max(0, min(10, int(v)))
+    return {k: clamp(out.get(k, 5)) for k in ("hook", "standalone", "payoff", "focus_match")} | \
+           {"title": str(out.get("title", ""))[:80], "reason": str(out.get("reason", ""))[:200]}
+
+
+def local_rerank(clips, cues, title, focus, count, log, prog):
+    """Have the local model read each candidate's transcript and re-score it."""
+    log(f"Reading {len(clips)} moments with the free local AI ({LOCAL_MODEL})...")
+    out = []
+    for i, c in enumerate(clips):
+        prog(i / max(1, len(clips)))
+        text = " ".join(t for s, e, t in cues if e > c["start"] and s < c["end"])
+        if not text.strip():
+            out.append(c)
+            continue
+        try:
+            r = local_rate(text, title, focus)
+        except Exception as err:
+            log(f"  local AI couldn't rate {fmt(c['start'])} ({err}); keeping its score.")
+            out.append(c)
+            continue
+        ai = (r["hook"] * 0.4 + r["standalone"] * 0.3 + r["payoff"] * 0.3) / 10
+        if focus:
+            ai = 0.6 * ai + 0.4 * r["focus_match"] / 10
+        out.append(dict(c, score=round(100 * (0.55 * ai + 0.45 * c["score"] / 100)),
+                        title=r["title"], reason=f"{r['reason']} ({c['reason'].split(' (')[0]})"))
+    prog(1.0)
+    return sorted(out, key=lambda c: c["score"], reverse=True)[:count]
+
+
+# ---------------------------------------------------------------- focus
+
+STOP = set("""a an and are as at be but by for from has have he her his i in into is it its
+me my of on or our she so that the their them they this to was we were what when where which
+who will with you your about moments moment clips clip parts part video videos stuff things
+thing find show want like some any more most just only really very please focus""".split())
+
+
+def stem(w):
+    for suf in ("ing", "ers", "er", "ed", "es", "s"):
+        if len(w) > len(suf) + 2 and w.endswith(suf):
+            return w[: -len(suf)]
+    return w
+
+
+def focus_terms(focus):
+    """'car chases and funny reactions' -> {'car', 'chas', 'funny', 'reaction'}"""
+    words = re.findall(r"[a-z0-9']+", (focus or "").lower())
+    return {stem(w) for w in words if w not in STOP and len(w) > 2}
+
+
+def focus_curve(terms, cues, n):
+    """Per-second score of how much the transcript matches the focus words."""
+    curve = [0.0] * n
+    for s, e, text in cues:
+        toks = {stem(t) for t in re.findall(r"[a-z0-9']+", text.lower())}
+        hits = len(terms & toks)
+        if hits:
+            for t in range(max(0, int(s)), min(n, int(e) + 1)):
+                curve[t] += hits
+    if not any(curve):
+        return None
+    sm = []                                    # spread each hit over ~10 s
+    for i in range(n):
+        a, b = max(0, i - 5), min(n, i + 6)
+        sm.append(sum(curve[a:b]) / (b - a))
+    top = max(sm) or 1.0
+    return [v / top for v in sm]
+
+
+def matched_words(terms, cues, s, e):
+    found = []
+    for cs, ce, text in cues:
+        if ce < s or cs > e:
+            continue
+        for t in re.findall(r"[a-z0-9']+", text.lower()):
+            if stem(t) in terms and t not in found:
+                found.append(t)
+    return found
+
+
 # ---------------------------------------------------------------- main entry
 
 def find_clips(source, *, is_local, ytdlp, ffmpeg, workdir, count=5,
-               min_len=15, max_len=60, use_ai=True, log=print, skip_text=None):
+               min_len=15, max_len=60, use_ai=True, log=print, skip_text=None,
+               focus="", progress=None):
     """Return (title, clips). Each clip: start, end, score, title, reason.
 
     skip_text: optional fetch(start, end) -> video path. When given, extra
     moments are found and any with a lot of on-screen text are skipped.
+    focus: optional text, e.g. "car chases, funny reactions".
+    progress: optional callback(fraction 0..1).
     """
+    prog = progress or (lambda f: None)
     if not skip_text:
         return _find(source, is_local, ytdlp, ffmpeg, workdir, count,
-                     min_len, max_len, use_ai, log)
+                     min_len, max_len, use_ai, log, focus, prog)
     import textcheck
     title, cands = _find(source, is_local, ytdlp, ffmpeg, workdir, count * 2 + 2,
-                         min_len, max_len, use_ai, log)
+                         min_len, max_len, use_ai, log, focus, lambda f: prog(0.5 * f))
     if not textcheck.tesseract():
         log(textcheck.INSTALL_HINT)
+        prog(1.0)
         return title, cands[:count]
-    return title, textcheck.check(cands, skip_text, ffmpeg, workdir, count, log)
+    return title, textcheck.check(cands, skip_text, ffmpeg, workdir, count, log,
+                                  progress=lambda f: prog(0.5 + 0.5 * f))
 
 
-def _find(source, is_local, ytdlp, ffmpeg, workdir, count, min_len, max_len, use_ai, log):
-    cues, curve, info = [], None, {}
+def _find(source, is_local, ytdlp, ffmpeg, workdir, count, min_len, max_len, use_ai, log,
+          focus="", prog=lambda f: None):
+    import captions
+    cues, curve, info, words = [], None, {}, []
+    terms = focus_terms(focus)
     if is_local:
         title = os.path.splitext(os.path.basename(source))[0]
         duration = None
     else:
         log("Reading video details...")
+        prog(0.02)
         info = video_info(source, ytdlp)
         title = info.get("title") or "clip"
         duration = float(info.get("duration") or 0)
         curve = heatmap_curve(info)
         log("  'Most replayed' graph: " + ("found" if curve else "not available"))
+        prog(0.12)
         log("Getting transcript...")
         cues = download_transcript(source, ytdlp, workdir)
+        words = captions.fetch_words(source, ytdlp, workdir) if cues else []
         log(f"  transcript: {len(cues)} lines" if cues else "  transcript: none")
+        prog(0.25)
+    if focus and not cues:
+        log(f"  No transcript, so the focus (\"{focus}\") can't be matched to what's said.")
 
     have_key = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
     if use_ai and cues and have_key:
-        log(f"Asking Claude to pick the best {count} moments...")
+        log(f"Asking Claude to pick the best {count} moments"
+            + (f' about "{focus}"' if focus else "") + " (about a minute)...")
         try:
-            picks = claude_clips(cues, curve, title, count, min_len, max_len)
+            picks = claude_clips(cues, curve, title, count, min_len, max_len, focus)
             out = []
             for p in picks:
                 s, e = float(p["start"]), float(p["end"])
@@ -402,7 +576,7 @@ def _find(source, is_local, ytdlp, ffmpeg, workdir, count, min_len, max_len, use
                     s, e = max(0.0, min(s, duration - 1)), min(e, duration)
                 if e - s < 3:
                     continue
-                s, e = snap(s, e, cues, min_len, max_len)
+                s, e = edge_snap(s, e, cues, words, min_len, max_len)
                 if duration:
                     e = min(e, duration)
                 ai = (p["hook"] * 0.4 + p["standalone"] * 0.3 + p["payoff"] * 0.3) / 10
@@ -411,26 +585,55 @@ def _find(source, is_local, ytdlp, ffmpeg, workdir, count, min_len, max_len, use
                             "title": p["title"], "reason": p["reason"]})
             out = pick_top(out, count)
             if out:
+                prog(1.0)
                 return title, out
             log("  Claude returned no usable clips; using the free method instead.")
         except Exception as err:  # network, auth, bad output: fall back to free mode
             log(f"  Claude scoring failed ({err}); using the free method instead.")
-    elif use_ai and cues and not have_key:
-        log("No ANTHROPIC_API_KEY set: using the free method (no AI scoring).")
+    local_ok = False
+    if use_ai and cues and not have_key:
+        local_ok, note = local_ai_status()
+        if not local_ok:
+            log("No ANTHROPIC_API_KEY set: using the free method (no AI scoring).")
+            log("  " + (note or LOCAL_HINT))
 
-    if curve:
-        return title, signal_clips(curve, "Most replayed section", duration,
-                                   count, min_len, max_len, cues)
+    label = "Most replayed section"
+    if not curve:
+        log("Measuring audio loudness...")
+        if is_local:
+            media = source
+        else:
+            media = download_audio(source, ytdlp, ffmpeg, workdir,
+                                   progress=lambda f: prog(0.3 + 0.5 * f))
+        curve = loudness_curve(media, ffmpeg) if media else None
+        if not curve:
+            raise RuntimeError("couldn't find any signal to pick clips from "
+                               "(no 'Most replayed' graph, transcript scoring, or audio).")
+        duration = duration or len(curve)
+        label = "Loud, energetic section"
+    prog(0.85)
 
-    log("Measuring audio loudness...")
-    media = source if is_local else download_audio(source, ytdlp, ffmpeg, workdir)
-    loud = loudness_curve(media, ffmpeg) if media else None
-    if not loud:
-        raise RuntimeError("couldn't find any signal to pick clips from "
-                           "(no 'Most replayed' graph, transcript scoring, or audio).")
-    duration = duration or len(loud)
-    return title, signal_clips(loud, "Loud, energetic section", duration,
-                               count, min_len, max_len, cues)
+    if terms and cues:
+        fc = focus_curve(terms, cues, len(curve))
+        if fc:
+            curve = [0.35 * a + 0.65 * b for a, b in zip(curve, fc)]
+            label = f'Matches "{focus}"'
+        else:
+            log(f'  Nothing said in the video matched "{focus}"; picking the best moments overall.')
+            terms = set()
+    want = count * 3 if local_ok else count
+    clips = signal_clips(curve, label, duration, want, min_len, max_len, cues, words)
+    for c in clips:
+        if terms:
+            hit = matched_words(terms, cues, c["start"], c["end"])
+            c["reason"] = (f'Mentions {", ".join(hit[:4])}' if hit else "Near the focus") + \
+                          " · " + c["reason"].split(" (peak")[0].replace(label, "popular part") \
+                          if hit else c["reason"]
+    if local_ok:
+        clips = local_rerank(clips, cues, title, focus, count, log,
+                             lambda f: prog(0.88 + 0.12 * f))
+    prog(1.0)
+    return title, clips
 
 
 def print_clips(clips, out=sys.stdout):

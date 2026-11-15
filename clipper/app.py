@@ -58,6 +58,13 @@ class Job:
         self.lines = []
         self.result = None
         self.error = None
+        self.pct = 0.0
+
+    def span(self, lo, hi):
+        """Progress callback covering lo..hi of this job (0..1)."""
+        def report(frac):
+            self.pct = max(self.pct, min(hi, lo + (hi - lo) * max(0.0, min(1.0, frac))))
+        return report
 
     def log(self, msg):
         for line in str(msg).splitlines():
@@ -104,7 +111,8 @@ def job_find(job, p):
             url, is_local=local, ytdlp=None if local else clip.ytdlp_cmd(),
             ffmpeg=ffmpeg, workdir=work,
             count=int(p.get("count") or 5), min_len=float(p.get("min") or 15),
-            max_len=float(p.get("max") or 60), use_ai=True, log=job.log, skip_text=fetch)
+            max_len=float(p.get("max") or 60), use_ai=True, log=job.log, skip_text=fetch,
+            focus=(p.get("focus") or "").strip(), progress=job.span(0, 1))
     return {"title": title, "clips": picks}
 
 
@@ -112,7 +120,7 @@ def section_key(url, start, end, quality):
     return hashlib.sha1(f"{url}|{start:.2f}|{end:.2f}|{quality}".encode()).hexdigest()[:16]
 
 
-def ensure_section(job, url, start, end, quality=1080):
+def ensure_section(job, url, start, end, quality=1080, progress=None):
     """Download [start, end] once; reuse it for preview and final render."""
     key = section_key(url, start, end, quality)
     folder = os.path.join(CACHE_DIR, key)
@@ -121,7 +129,8 @@ def ensure_section(job, url, start, end, quality=1080):
         return key, path
     os.makedirs(folder, exist_ok=True)
     job.log("Downloading this part of the video...")
-    raw = clip.fetch_section(url, start, end, quality, folder, clip.find_ffmpeg())
+    raw = clip.fetch_section(url, start, end, quality, folder, clip.find_ffmpeg(),
+                             on_progress=progress)
     os.replace(raw, path)
     return key, path
 
@@ -131,20 +140,21 @@ def video_words(job, url, browser):
         return []
     k = (url, browser or "")
     if k not in WORDS:
-        job.log("Getting YouTube's caption timings...")
+        job.log("Getting caption timings...")
         with tempfile.TemporaryDirectory(prefix="clipwords_") as work:
             WORDS[k] = captions.fetch_words(url, clip.ytdlp_cmd(), work)
     return WORDS[k]
 
 
-def speech_words(job, key, path):
+def speech_words(job, key, path, progress=None):
     """Transcribe a downloaded section on this computer (cached)."""
     cache = os.path.join(CACHE_DIR, key, "speech.json")
     if os.path.isfile(cache):
         with open(cache) as fh:
             return [tuple(w) for w in json.load(fh)]
     with tempfile.TemporaryDirectory(prefix="clipspeech_") as work:
-        words = captions.transcribe(path, clip.find_ffmpeg(), work, log=job.log)
+        words = captions.transcribe(path, clip.find_ffmpeg(), work, log=job.log,
+                                    progress=progress)
     with open(cache, "w") as fh:
         json.dump(words, fh)
     return words
@@ -158,21 +168,33 @@ def job_prepare(job, p):
     if end - start < 1:
         raise RuntimeError("The clip must be at least 1 second long.")
     sec_start, sec_end = max(0.0, start - PAD), end + PAD
-    key, path = ensure_section(job, url, sec_start, sec_end)
+    source = p.get("words_from", "auto")     # auto | youtube | speech | none
+    may_speak = source != "none" and bool(captions.whisper_backend())
+    key, path = ensure_section(job, url, sec_start, sec_end,
+                               progress=job.span(0, 0.6 if may_speak else 0.9))
     ffmpeg = clip.find_ffmpeg()
     length = clip.local_duration(path, ffmpeg) or (sec_end - sec_start)
 
-    source = p.get("words_from", "auto")     # auto | youtube | speech | none
-    words, used = [], "none"
+    words, used, note = [], "none", ""
     if source in ("auto", "youtube"):
         words = captions.words_in(video_words(job, url, p.get("browser")), sec_start, sec_end)
         used = "youtube" if words else "none"
     if (source == "speech" or (source == "auto" and not words)) and captions.whisper_backend():
-        words, used = speech_words(job, key, path), "speech"
+        try:
+            words, used = speech_words(job, key, path, job.span(0.62, 0.99)), "speech"
+        except RuntimeError as err:
+            if source == "speech":
+                raise
+            note = f"{err} For now, you can type captions with \u201c+ Add line\u201d."
     w, h = clip.video_size(path, ffmpeg)
+    cut_in, cut_out, snapped = start - sec_start, min(length, end - sec_start), False
+    if words and p.get("snap", True):
+        # Start and end on whole sentences, not mid-word.
+        a, b, snapped = captions.sentence_snap(cut_in, cut_out, words, min_len=1.0, reach=6)
+        cut_in, cut_out = max(0.0, a), min(length, b)
     return {"video": f"/media/{key}/section.mp4", "width": w, "height": h,
             "sec_start": sec_start, "sec_end": sec_end, "length": length,
-            "cut_in": start - sec_start, "cut_out": min(length, end - sec_start),
+            "cut_in": cut_in, "cut_out": cut_out, "snapped": snapped, "note": note,
             "words_from": used,
             "words": [{"s": round(a, 3), "e": round(b, 3), "w": t} for a, b, t in words]}
 
@@ -186,7 +208,7 @@ def job_make(job, p):
         raise RuntimeError("The clip must be at least 1 second long.")
     aspect = p.get("aspect") or "9:16"
     ffmpeg = clip.find_ffmpeg()
-    _, path = ensure_section(job, url, sec_start, sec_end)
+    _, path = ensure_section(job, url, sec_start, sec_end, progress=job.span(0, 0.1))
 
     words, lines = None, None
     if p.get("captions", True) and p.get("words"):
@@ -218,12 +240,13 @@ def job_make(job, p):
     job.log("Making the clip (this can take a minute)...")
     with tempfile.TemporaryDirectory(prefix="clipmake_") as work:
         raw = os.path.join(work, "raw.mp4")
-        clip.run([ffmpeg, "-y", "-i", path, "-ss", f"{cut_in:.3f}", "-to", f"{cut_out:.3f}",
-                  "-c:v", "libx264", "-preset", "veryfast", "-crf", "16",
-                  "-c:a", "aac", "-b:a", "192k", raw])
+        clip.run_ffmpeg([ffmpeg, "-y", "-i", path, "-ss", f"{cut_in:.3f}", "-to", f"{cut_out:.3f}",
+                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "16",
+                         "-c:a", "aac", "-b:a", "192k", raw],
+                        job.span(0.1, 0.35), cut_out - cut_in)
         crop = dict(p.get("crop") or {}, aspect=aspect)
         clip.convert(raw, dest, "mp4", ffmpeg, 480, 12, words, p.get("style") or "bold",
-                     lines, crop)
+                     lines, crop, on_progress=job.span(0.35, 1.0))
     return {"file": "/out/" + os.path.basename(dest), "name": os.path.basename(dest)}
 
 
@@ -239,7 +262,11 @@ def info():
     except RuntimeError:
         ytdlp_ok = False
     import textcheck
+    local_ok, local_note = finder.local_ai_status()
     return {
+        "smart": ("claude" if os.environ.get("ANTHROPIC_API_KEY") else
+                  "local" if local_ok else "free"),
+        "local_note": local_note or finder.LOCAL_HINT,
         "out_dir": OUT_DIR, "ffmpeg": ffmpeg_ok, "captions": caps, "ytdlp": ytdlp_ok,
         "whisper": bool(captions.whisper_backend()), "whisper_hint": captions.INSTALL_HINT,
         "tesseract": bool(textcheck.tesseract()), "tesseract_hint": textcheck.INSTALL_HINT,
@@ -343,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 return self.send_json({"error": "unknown job"}, 404)
             return self.send_json({"status": job.status, "log": job.lines[-6:],
+                                   "pct": round(job.pct, 4),
                                    "result": job.result, "error": job.error})
         for prefix, root in (("/media/", CACHE_DIR), ("/out/", OUT_DIR)):
             if path.startswith(prefix):
@@ -426,6 +454,10 @@ label{color:var(--muted);font-size:13px}
 label.chk{display:inline-flex;gap:6px;align-items:center;color:var(--ink);font-size:14px}
 .status{display:none;margin-top:12px;padding:10px 12px;border-radius:9px;background:var(--soft);font-size:13px;white-space:pre-wrap}
 .status.err{color:var(--err)}
+.pbar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:8px 0 4px}
+.pbar i{display:block;height:100%;width:0;background:var(--accent);border-radius:4px;transition:width .5s ease}
+.pmeta{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:12px}
+textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:9px;padding:9px 11px;width:100%;resize:vertical;min-height:44px}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--muted);border-top-color:transparent;border-radius:50%;animation:s .8s linear infinite;margin-right:8px;vertical-align:-1px}
 @keyframes s{to{transform:rotate(360deg)}}
 .pick{display:flex;gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
@@ -493,6 +525,11 @@ label.chk{display:inline-flex;gap:6px;align-items:center;color:var(--ink);font-s
       <label>Clips <input id="count" type="number" min="1" max="15" value="5"></label>
       <label>Length <input id="minl" type="number" min="3" value="15"> to <input id="maxl" type="number" min="5" value="60"> sec</label>
     </div>
+    <div style="margin-top:12px">
+      <label for="focus">Focus on (optional)</label>
+      <textarea id="focus" rows="1" placeholder="e.g. funny reactions, car chases, when they talk about the heist"></textarea>
+      <p class="hint" id="smartLine"></p>
+    </div>
     <div class="row" style="margin-top:10px">
       <label class="chk"><input id="capDefault" type="checkbox" checked> Add captions</label>
       <label class="chk" id="skipLbl"><input id="skipText" type="checkbox" checked> Skip moments with text already on screen</label>
@@ -541,6 +578,7 @@ label.chk{display:inline-flex;gap:6px;align-items:center;color:var(--ink);font-s
           <span>Start</span><span><button class="small" data-t="in" data-d="-1">−1s</button> <button class="small" data-t="in" data-d="-0.2">−.2</button> <b id="inT">0:00.0</b> <button class="small" data-t="in" data-d="0.2">+.2</button> <button class="small" data-t="in" data-d="1">+1s</button></span><button class="small" data-set="in">Set to playhead</button>
           <span>End</span><span><button class="small" data-t="out" data-d="-1">−1s</button> <button class="small" data-t="out" data-d="-0.2">−.2</button> <b id="outT">0:00.0</b> <button class="small" data-t="out" data-d="0.2">+.2</button> <button class="small" data-t="out" data-d="1">+1s</button></span><button class="small" data-set="out">Set to playhead</button>
         </div>
+        <div class="row" style="margin-top:8px"><button class="small" id="snapBtn">Snap to sentences</button><span class="hint" id="snapNote" style="margin:0"></span></div>
         <p class="hint">Length: <b id="lenT">0s</b>. You can move the start and end up to 10 seconds past the picked moment.</p>
       </div>
 
@@ -617,7 +655,19 @@ function parseT(x){ x = String(x).trim(); if(!x) return NaN; if(/^\d+(\.\d+)?$/.
   const p = x.split(":").map(Number); if(p.some(isNaN)) return NaN; return p.reduce((a,b)=>a*60+b,0); }
 async function api(path, body){ const r = await fetch(path, body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {}); return r.json(); }
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
-function status(el, msg, kind){ el.style.display = msg ? "block" : "none"; el.className = "status" + (kind==="err" ? " err" : "");
+function status(el, msg, kind, prog){
+  el.style.display = msg ? "block" : "none"; el.className = "status" + (kind==="err" ? " err" : "");
+  if (kind === "busy" && prog) {
+    const pct = Math.round(prog.pct * 100);
+    let left = "";
+    if (prog.pct >= 0.05 && prog.pct < 0.995) {
+      const secs = prog.elapsed * (1 - prog.pct) / prog.pct;
+      left = secs < 10 ? "a few seconds left" : secs < 90 ? `about ${Math.round(secs / 5) * 5}s left` : `about ${Math.round(secs / 60)} min left`;
+    }
+    el.innerHTML = `<div>${escapeHtml(msg || "Working...")}</div><div class="pbar"><i style="width:${Math.max(2, pct)}%"></i></div>` +
+      `<div class="pmeta"><span>${pct}%</span><span>${left || fmtT(prog.elapsed) + " so far"}</span></div>`;
+    return;
+  }
   el.innerHTML = (kind==="busy" ? '<span class="spin"></span>' : "") + escapeHtml(msg || ""); }
 
 async function runJob(path, body, el){
@@ -625,10 +675,11 @@ async function runJob(path, body, el){
   let job;
   try { ({job} = await api(path, body)); }
   catch (e) { status(el, "Couldn't reach Clip Maker. Is its window still open?", "err"); throw e; }
+  const t0 = Date.now();
   return new Promise((resolve, reject) => {
     const tick = async () => {
       const j = await api("/api/job/" + job);
-      if (j.status === "running"){ status(el, (j.log.slice(-1)[0] || "Working..."), "busy"); setTimeout(tick, 700); }
+      if (j.status === "running"){ status(el, (j.log.slice(-1)[0] || "Working...").trim(), "busy", {pct:j.pct || 0, elapsed:(Date.now() - t0) / 1000}); setTimeout(tick, 600); }
       else if (j.status === "done"){ status(el, ""); resolve(j.result); }
       else { status(el, j.error, "err"); reject(new Error(j.error)); }
     };
@@ -644,7 +695,8 @@ $("#findBtn").onclick = async () => {
   try {
     await READY;
     const r = await runJob("/api/find", {url, browser:$("#browser").value, count:$("#count").value, min:$("#minl").value,
-      max:$("#maxl").value, skip_text:$("#skipText").checked && S.info.tesseract}, $("#findStatus"));
+      max:$("#maxl").value, skip_text:$("#skipText").checked && S.info.tesseract,
+      focus:$("#focus").value.trim()}, $("#findStatus"));
     S.title = r.title; showPicks(r.clips);
   } catch(e) {} finally { $("#findBtn").disabled = false; }
 };
@@ -675,6 +727,7 @@ async function openEditor(c, wordsFrom){
       words_from: wordsFrom || (capOn ? "auto" : "none")}, $("#prepStatus"));
     const first = !wordsFrom;
     S.prep = r; S.dims = [r.width, r.height];
+    $("#snapNote").textContent = r.snapped ? "Adjusted so it starts and ends on full sentences." : "";
     if (first) {
       S.cut = [r.cut_in, r.cut_out]; S.crop = {x:0.5, y:0.5, zoom:1}; $("#zoom").value = 1;
       $("#capOn").checked = capOn; $("#capPanel").classList.toggle("hidden", !capOn);
@@ -686,12 +739,32 @@ async function openEditor(c, wordsFrom){
     $("#srcLbl").textContent = {youtube:"From YouTube's captions.", speech:"From speech-to-text on this computer.", none:"No captions yet."}[r.words_from];
     $("#ytBtn").classList.toggle("hidden", r.words_from === "youtube" || /^\//.test($("#url").value.trim()));
     $("#speechBtn").classList.toggle("hidden", r.words_from === "speech");
-    if (capOn && !r.words.length && r.words_from === "none")
+    if (r.note) status($("#prepStatus"), r.note, "");
+    else if (capOn && !r.words.length && r.words_from === "none")
       status($("#prepStatus"), S.info.whisper ? "No speech found here. Use “+ Add line” to type your own." :
         "No captions found for this part. Type your own with “+ Add line”, or install speech-to-text:\n" + S.info.whisper_hint, "");
     renderLines(); layout(); updateTrim();
   } catch(e) {}
 }
+// Start/end on whole sentences: a sentence ends at . ! ? or a pause of 0.7s+.
+function sentenceSnap(a, b){
+  const ws = S.lines.flat().slice().sort((x, y) => x.s - y.s);
+  if (!ws.length) return null;
+  const ends = [], starts = [ws[0].s];
+  ws.forEach((w, i) => { const n = ws[i + 1];
+    if (!n || /[.!?…]['")\]]*$/.test(w.w) || n.s - w.e >= 0.7) { ends.push(w.e); if (n) starts.push(n.s); } });
+  const near = (list, t, lo, hi) => list.filter(x => x >= t - lo && x <= t + hi).sort((x, y) => Math.abs(x - t) - Math.abs(y - t))[0];
+  let s = near(starts, a, 6, 1.5), e = near(ends, b, 6, 6);
+  if (s === undefined) { const w = ws.find(w => w.s < a && a < w.e); s = w ? w.s : a; }
+  if (e === undefined) { const w = ws.find(w => w.s < b && b < w.e); e = w ? w.e : b; }
+  return [Math.max(0, s - 0.15), Math.min(S.prep.length, e + 0.35)];
+}
+$("#snapBtn").onclick = () => {
+  const r = sentenceSnap(S.cut[0], S.cut[1]);
+  if (!r) { $("#snapNote").textContent = "No caption words to snap to."; return; }
+  if (r[1] - r[0] < 1) { $("#snapNote").textContent = "Couldn't find whole sentences here."; return; }
+  S.cut = r; updateTrim(); $("#snapNote").textContent = "Starts and ends on full sentences."; vid().currentTime = S.cut[0];
+};
 $("#speechBtn").onclick = () => {
   if (!S.info.whisper) return status($("#prepStatus"), S.info.whisper_hint, "err");
   openEditor(S.clip, "speech");
@@ -904,6 +977,10 @@ const READY = (async () => {
     $("#skipLbl").title = S.info.tesseract_hint; w.push(S.info.tesseract_hint); }
   $("#warn").innerHTML = w.map(x => `<div class="warn">${escapeHtml(x)}</div>`).join("");
   if (S.info.mac) $("#browser").value = "chrome";
+  $("#smartLine").textContent = {
+    claude:"Smart picks: Claude reads the transcript.",
+    local:"Smart picks: the free local AI (Ollama) reads the transcript.",
+    free:"Free picks: by popularity, loudness and words matching your focus. " + S.info.local_note}[S.info.smart];
 })();
 </script>
 </body>

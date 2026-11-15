@@ -276,7 +276,7 @@ INSTALL_HINT = ("Install speech-to-text once:  python3 -m pip install -U faster-
                 "(on a Mac, if that fails:  python3 -m pip install -U mlx-whisper)")
 
 
-def transcribe(media, ffmpeg, workdir, log=print):
+def transcribe(media, ffmpeg, workdir, log=print, progress=None):
     """Transcribe a video/audio file on this computer.
 
     Returns [(start, end, word)] in seconds from the start of the file. The
@@ -295,7 +295,7 @@ def transcribe(media, ffmpeg, workdir, log=print):
             "and can take a few minutes...")
     log("Transcribing speech...")
     try:
-        return _transcribe(backend, wav)
+        return _transcribe(backend, wav, progress or (lambda f: None))
     except Exception as err:  # model download blocked, out of memory, broken install
         raise RuntimeError(
             f"Speech-to-text didn't work ({err}). The first time, it needs internet to "
@@ -303,14 +303,17 @@ def transcribe(media, ffmpeg, workdir, log=print):
             "python3 -m pip install -U faster-whisper") from err
 
 
-def _transcribe(backend, wav):
+def _transcribe(backend, wav, prog):
     words = []
     if backend == "faster_whisper":
         from faster_whisper import WhisperModel
         if backend not in _MODEL:
             _MODEL[backend] = WhisperModel(WHISPER_SIZE, device="auto", compute_type="int8")
-        segments, _ = _MODEL[backend].transcribe(wav, word_timestamps=True, vad_filter=True)
+        segments, info = _MODEL[backend].transcribe(wav, word_timestamps=True, vad_filter=True)
+        total = float(getattr(info, "duration", 0) or 0)
         for seg in segments:
+            if total:
+                prog(min(0.99, seg.end / total))
             for w in seg.words or []:
                 words.append((float(w.start), float(w.end), w.word.strip()))
     else:
@@ -329,3 +332,56 @@ def _transcribe(backend, wav):
             for w in seg.get("words", []):
                 words.append((float(w["start"]), float(w["end"]), str(w["word"]).strip()))
     return [w for w in words if w[2] and w[1] > w[0]]
+
+
+# ---------------------------------------------------------------- sentence edges
+
+def sentence_snap(start, end, words, min_len=3.0, max_len=None, reach=10.0):
+    """Move a clip's start and end so speech isn't cut off mid-sentence.
+
+    words: [(start, end, word)] (or dicts with s/e/w). A sentence ends at a
+    word ending in . ! or ?, or at a pause of 0.7 s or more (YouTube's
+    auto-captions have no punctuation, so pauses matter). The end may move up
+    to `reach` seconds either way, and the clip may run a little past
+    max_len rather than stop mid-sentence. Returns (start, end, changed).
+    """
+    ws = [(w["s"], w["e"], w["w"]) if isinstance(w, dict) else (w[0], w[1], w[2])
+          for w in words]
+    ws = sorted(w for w in ws if w[1] > w[0])
+    if not ws:
+        return start, end, False
+    ends, starts = [], [ws[0][0]]
+    for i, (s, e, t) in enumerate(ws):
+        nxt = ws[i + 1][0] if i + 1 < len(ws) else None
+        if nxt is None or re.search(r"[.!?…]['\")\]]*$", t) or nxt - e >= 0.7:
+            ends.append(e)
+            if nxt is not None:
+                starts.append(nxt)
+    limit = (max_len + 8) if max_len else None
+
+    # Start: the nearest sentence start at or a little before the chosen start.
+    new_s = start
+    cand = [b for b in starts if start - reach * 0.6 <= b <= start + 1.5]
+    if cand:
+        new_s = min(cand, key=lambda b: (abs(b - start) if b <= start else abs(b - start) * 2))
+    else:
+        for s, e, _ in ws:                     # never start inside a word
+            if s < start < e:
+                new_s = s
+                break
+    new_s = max(0.0, new_s - 0.15)
+
+    # End: the sentence end closest to the chosen end (a little later is fine).
+    new_e = end
+    cand = [b for b in ends if b - new_s >= min_len and abs(b - end) <= reach
+            and (limit is None or b - new_s <= limit)]
+    if cand:
+        new_e = min(cand, key=lambda b: abs(b - end) * (0.8 if b >= end else 1.0))
+    else:
+        for s, e, _ in ws:                     # never stop inside a word
+            if s < end < e:
+                new_e = e
+                break
+    new_e = new_e + 0.35                       # let the last word ring out
+    changed = abs(new_s - start) > 0.2 or abs(new_e - end) > 0.2
+    return round(new_s, 2), round(new_e, 2), changed

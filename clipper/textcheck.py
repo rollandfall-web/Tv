@@ -65,7 +65,7 @@ def has_text(words):
     return len(words) >= MIN_WORDS or any(len(w) >= 5 for w in words)
 
 
-def check(candidates, fetch, ffmpeg, workdir, count, log=print):
+def check(candidates, fetch, ffmpeg, workdir, count, log=print, progress=None):
     """Read each candidate clip's frames; keep up to `count` clips without much text.
 
     fetch(start, end) -> path of a (low-resolution) video of that part.
@@ -77,7 +77,9 @@ def check(candidates, fetch, ffmpeg, workdir, count, log=print):
         return candidates[:count]
     log(f"Checking {len(candidates)} moments for text on screen...")
     frames = []   # per candidate: list of word sets
+    prog = progress or (lambda f: None)
     for i, c in enumerate(candidates):
+        prog(i / max(1, len(candidates)))
         try:
             video = fetch(c["start"], c["end"])
             imgs = sample_frames(video, ffmpeg, os.path.join(workdir, f"txt{i}"))
@@ -101,6 +103,7 @@ def check(candidates, fetch, ffmpeg, workdir, count, log=print):
     overlay = {w for w in in_frames
                if in_clips.get(w, 0) >= 2 or in_frames[w] / max(1, len(all_frames)) >= 0.4}
 
+    prog(1.0)
     kept, rejected = [], []
     for c, fl in zip(candidates, frames):
         texty = sum(1 for f in fl if has_text(f - overlay))

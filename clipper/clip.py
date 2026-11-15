@@ -232,6 +232,63 @@ def run(cmd, quiet=True, cwd=None):
     return result
 
 
+_PROGRESS_PATTERNS = (
+    (re.compile(r"out_time_(?:us|ms)=(\d+)"), lambda m: int(m.group(1)) / 1e6, "time"),
+    (re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)"),
+     lambda m: int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)), "time"),
+    (re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%"), lambda m: float(m.group(1)) / 100, "frac"),
+)
+
+
+def run_progress(cmd, on_progress, total=None, cwd=None):
+    """Run a command and report how far along it is (0..1) as it goes.
+
+    Understands ffmpeg's -progress/time= output (needs `total` seconds) and
+    yt-dlp's "[download] 42.0%" lines. Output is read as it arrives.
+    """
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    tail, buf, best = [], b"", 0.0
+    while True:
+        chunk = proc.stdout.read1(4096) if hasattr(proc.stdout, "read1") else proc.stdout.read(4096)
+        if not chunk:
+            break
+        buf += chunk
+        parts = re.split(rb"[\r\n]", buf)
+        buf = parts.pop()
+        for raw_line in parts:
+            line = raw_line.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            tail = (tail + [line])[-12:]
+            for rx, conv, kind in _PROGRESS_PATTERNS:
+                m = rx.search(line)
+                if not m:
+                    continue
+                v = conv(m)
+                frac = v / total if kind == "time" and total else (v if kind == "frac" else None)
+                if frac is not None and frac > best:
+                    best = min(0.999, frac)
+                    try:
+                        on_progress(best)
+                    except Exception:
+                        pass
+                break
+    proc.wait()
+    if proc.returncode != 0:
+        detail = [l for l in tail if "=" not in l or " " in l][-8:]
+        die("command failed:\n  " + " ".join(cmd[:3]) + " ...\n" + "\n".join(detail))
+    on_progress(1.0)
+    return proc
+
+
+def run_ffmpeg(cmd, on_progress=None, total=None, cwd=None):
+    """Run ffmpeg, reporting progress when asked."""
+    if not on_progress or not total:
+        return run(cmd, cwd=cwd)
+    return run_progress([cmd[0], "-progress", "pipe:1", "-nostats"] + cmd[1:],
+                        on_progress, total, cwd)
+
+
 # ---------------------------------------------------------------- work
 
 def video_title(source):
@@ -258,17 +315,21 @@ def local_duration(path, ffmpeg):
     return int(h) * 3600 + int(mnt) * 60 + float(sec)
 
 
-def fetch_section(source, start, end, quality, workdir, ffmpeg):
-    """Get just [start, end] of the video as an MP4 in workdir."""
+def fetch_section(source, start, end, quality, workdir, ffmpeg, on_progress=None):
+    """Get just [start, end] of the video as an MP4 in workdir.
+
+    on_progress: optional callback getting 0..1 as the download goes.
+    """
     out = os.path.join(workdir, f"raw_{int(start * 1000)}.mp4")
     if is_local_file(source):
         length = local_duration(source, ffmpeg)
         if length is not None and start >= length:
             die(f"start time {fmt_time(start)} is past the end of the video "
                 f"({fmt_time(length)}).")
-        run([ffmpeg, "-y", "-ss", fmt_time(start), "-to", fmt_time(end),
-             "-i", source, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out])
+        run_ffmpeg([ffmpeg, "-y", "-ss", fmt_time(start), "-to", fmt_time(end),
+                    "-i", source, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                    "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out],
+                   on_progress, end - start)
         return out
 
     # Prefer H.264 (avc1): it plays everywhere, including browser previews.
@@ -287,8 +348,18 @@ def fetch_section(source, start, end, quality, workdir, ffmpeg):
         "-o", os.path.join(workdir, f"dl_{int(start * 1000)}.%(ext)s"),
         source,
     ]
-    run(cmd, quiet=False)
-    files = [f for f in os.listdir(workdir) if f.startswith(f"dl_{int(start * 1000)}.")]
+    if on_progress:
+        # yt-dlp cuts sections with ffmpeg; ask ffmpeg to report its progress.
+        try:
+            run_progress(cmd[:-1] + ["--newline", "--downloader-args",
+                                     "ffmpeg:-progress pipe:2 -nostats", source],
+                         on_progress, end - start)
+        except (RuntimeError, SystemExit):
+            run(cmd, quiet=False)          # retry as a plain download (real errors show here)
+    else:
+        run(cmd, quiet=False)
+    files = [f for f in os.listdir(workdir) if f.startswith(f"dl_{int(start * 1000)}.")
+             and not f.endswith((".part", ".ytdl", ".temp"))]
     if not files:
         die("the download finished but no file was saved.")
     os.replace(os.path.join(workdir, files[0]), out)
@@ -328,7 +399,7 @@ def crop_filter(src_w, src_h, aspect="9:16", x=0.5, y=0.5, zoom=1.0):
 
 
 def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold",
-            lines=None, crop=None):
+            lines=None, crop=None, on_progress=None):
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
@@ -356,10 +427,12 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
         if not filters:
             shutil.move(raw, dest)
             return
-        run([ffmpeg, "-y", "-i", os.path.abspath(raw), "-vf", ",".join(filters),
-             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-             "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
-             os.path.abspath(dest)], cwd=os.path.dirname(os.path.abspath(raw)))
+        run_ffmpeg([ffmpeg, "-y", "-i", os.path.abspath(raw), "-vf", ",".join(filters),
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                    "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+                    os.path.abspath(dest)], on_progress,
+                   local_duration(raw, ffmpeg) if on_progress else None,
+                   cwd=os.path.dirname(os.path.abspath(raw)))
     elif kind == "gif":
         vf = (f"fps={gif_fps},scale={gif_width}:-1:flags=lanczos,split[a][b];"
               f"[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5")
@@ -421,7 +494,7 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
     return made
 
 
-def auto_select(source, count, min_len, max_len, use_ai, skip_text=False):
+def auto_select(source, count, min_len, max_len, use_ai, skip_text=False, focus=""):
     """Run the highlight finder. Returns (title, clips list from finder)."""
     import finder
 
@@ -439,7 +512,8 @@ def auto_select(source, count, min_len, max_len, use_ai, skip_text=False):
             title, picks = finder.find_clips(
                 source, is_local=local, ytdlp=None if local else ytdlp_cmd(),
                 ffmpeg=ffmpeg, workdir=work, count=count,
-                min_len=min_len, max_len=max_len, use_ai=use_ai, skip_text=fetch)
+                min_len=min_len, max_len=max_len, use_ai=use_ai, skip_text=fetch,
+                focus=focus)
         except RuntimeError as err:
             die(explain(str(err)))
     if not picks:
@@ -488,7 +562,8 @@ def interactive():
                         label_time(url_start) if url_start is not None else "auto")
             if first.lower() == "auto":
                 count = int(ask("How many clips to find", "5") or 5)
-                title, picks = auto_select(source, count, 15, 60, True)
+                focus = ask("Focus on anything? e.g. funny reactions (Enter to skip)", "")
+                title, picks = auto_select(source, count, 15, 60, True, focus=focus)
                 clips = [(c["start"], c["end"]) for c in choose_picks(picks)]
             elif "," in first or re.search(r"\d[-+]\d", first):
                 clips = parse_clip_list(first)
@@ -538,6 +613,8 @@ def main():
     auto.add_argument("--list", action="store_true",
                       help="only list the clips found, don't cut them")
     auto.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    auto.add_argument("--focus", metavar="TEXT",
+                      help='what to look for, e.g. "car chases, funny reactions"')
     auto.add_argument("--skip-text", action="store_true",
                       help="skip moments with text on screen (needs Tesseract)")
     cap = p.add_argument_group("captions")
@@ -559,7 +636,7 @@ def main():
         source = a.source
         kind = "vertical" if a.vertical else "gif" if a.gif else "mp3" if a.mp3 else "mp4"
         title, picks = auto_select(source, max(1, a.count), a.min, a.max, not a.no_ai,
-                                   a.skip_text)
+                                   a.skip_text, a.focus or "")
         if a.list:
             if a.json:
                 import json

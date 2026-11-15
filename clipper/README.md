@@ -9,6 +9,7 @@ Cuts clips out of a YouTube video and saves them as MP4, as a vertical video for
 After the one-time setup below, **double-click `Clip Maker.command`** (Mac) or **`Clip Maker.bat`** (Windows) in this folder. A small window opens (leave it open) and Clip Maker opens in your web browser. There, you:
 
 1. Paste a YouTube or Twitch link and click **Find best moments** (or type a start and end time).
+   - **Focus on (optional):** say what you want, like "funny reactions" or "when they talk about the heist".
    - **Add captions:** turn this off if the video already has subtitles burned in.
    - **Skip moments with text already on screen:** leaves out parts with subtitles, captions or big titles. Text that is always there, like a game HUD or a streamer's name, is ignored.
 2. Click **Edit & make** on a moment.
@@ -16,6 +17,7 @@ After the one-time setup below, **double-click `Clip Maker.command`** (Mac) or *
    - **Size:** 9:16 (Shorts, TikTok, Reels), 4:5 (Instagram feed), 1:1 (square) or 16:9 (YouTube).
    - **Drag the video** to choose what's in frame, and use **Zoom** to get closer.
    - **Start / End:** nudge them, or play and click **Set to playhead**. You can go up to 10 seconds past the picked moment.
+   - When there's speech, clips start and end on **full sentences** automatically. After trimming, click **Snap to sentences** to fix the edges again.
 4. Edit the captions:
    - **Words:** they come from YouTube's captions, or from **Transcribe speech** (speech-to-text on your computer). Fix any word, delete lines, or add your own. Wrap a word in `*stars*` to highlight it.
    - **Style:** font, size, position, colors, outline, bold, uppercase, pop, shadow, words per line.
@@ -30,8 +32,11 @@ Close the small window to quit. The first time on a Mac, if it says the file can
 |---|---|---|
 | Speech-to-text | Writes captions for videos without them (Twitch, your own files) | `python3 -m pip install -U faster-whisper` (Mac, if that fails: `python3 -m pip install -U mlx-whisper`) |
 | Text detection | Skips moments with text already on screen | Mac: `brew install tesseract` · Windows: `winget install UB-Mannheim.TesseractOCR` |
+| Free local AI | Reads the transcript and judges each moment (hook, makes sense alone, payoff, your focus). No API key and no cost. | Install [Ollama](https://ollama.com), open it, then run `ollama pull llama3.2` |
 
 The first time you transcribe, the speech model downloads (about 500 MB). After that it works offline.
+
+**Which "smart picks" you get:** with an Anthropic API key, Claude reads the transcript (best). Without one, the free local AI does it if Ollama is installed and open. Otherwise, the free method picks by popularity, loudness and words that match your focus. The app shows which one it's using under the focus box.
 
 ## Set up (once)
 

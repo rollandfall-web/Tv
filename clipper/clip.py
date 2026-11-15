@@ -36,6 +36,15 @@ from urllib.parse import parse_qs, urlparse
 
 FORMATS = ("mp4", "vertical", "gif", "mp3")
 
+# Python from python.org on a Mac ships without website certificates, which
+# breaks every YouTube download. If the certifi package is installed, point
+# Python (and yt-dlp, which inherits this) at its certificates.
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+except ImportError:
+    pass
+
 
 # ---------------------------------------------------------------- helpers
 
@@ -160,9 +169,8 @@ def explain(msg):
     low = msg.lower()
     if "certificate_verify_failed" in low or "certificate verify failed" in low:
         tip = ("Python can't check website certificates yet (common on Mac). Run:\n"
-               "  open \"/Applications/Python 3.14/Install Certificates.command\"\n"
                "  python3 -m pip install -U certifi yt-dlp\n"
-               "(Change 3.14 to your Python version; see the folder in Applications.)")
+               "then run this command again.")
     elif "confirm your age" in low or "age-restricted" in low or "inappropriate for some users" in low:
         tip = ("This video is age-restricted. Sign in to YouTube in Chrome, then add "
                "--browser chrome to the command (or --browser safari / firefox).")

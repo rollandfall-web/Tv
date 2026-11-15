@@ -253,3 +253,79 @@ def write_ass(path, words, width, height, style="bold", lines=None):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(build_ass(words, width, height, style, lines))
     return path
+
+
+# ---------------------------------------------------------------- speech to text
+
+_MODEL = {}
+WHISPER_SIZE = os.environ.get("CLIPMAKER_WHISPER", "small")   # tiny/base/small/medium
+
+
+def whisper_backend():
+    """Name of the installed speech-to-text library, or None."""
+    for name in ("faster_whisper", "mlx_whisper", "whisper"):
+        try:
+            __import__(name)
+            return name
+        except Exception:  # not installed, or broken install
+            continue
+    return None
+
+
+INSTALL_HINT = ("Install speech-to-text once:  python3 -m pip install -U faster-whisper\n"
+                "(on a Mac, if that fails:  python3 -m pip install -U mlx-whisper)")
+
+
+def transcribe(media, ffmpeg, workdir, log=print):
+    """Transcribe a video/audio file on this computer.
+
+    Returns [(start, end, word)] in seconds from the start of the file. The
+    first run downloads the speech model (small: about 500 MB).
+    """
+    backend = whisper_backend()
+    if not backend:
+        raise RuntimeError("Speech-to-text isn't installed. " + INSTALL_HINT)
+    wav = os.path.join(workdir, "speech.wav")
+    r = subprocess.run([ffmpeg, "-y", "-i", media, "-vn", "-ac", "1", "-ar", "16000", wav],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if r.returncode != 0 or not os.path.isfile(wav):
+        raise RuntimeError("Couldn't read the audio for transcription.")
+    if backend not in _MODEL:
+        log(f"Loading the speech model ({WHISPER_SIZE}). The first time, this downloads it "
+            "and can take a few minutes...")
+    log("Transcribing speech...")
+    try:
+        return _transcribe(backend, wav)
+    except Exception as err:  # model download blocked, out of memory, broken install
+        raise RuntimeError(
+            f"Speech-to-text didn't work ({err}). The first time, it needs internet to "
+            "download the speech model; if that's fine, try updating it:  "
+            "python3 -m pip install -U faster-whisper") from err
+
+
+def _transcribe(backend, wav):
+    words = []
+    if backend == "faster_whisper":
+        from faster_whisper import WhisperModel
+        if backend not in _MODEL:
+            _MODEL[backend] = WhisperModel(WHISPER_SIZE, device="auto", compute_type="int8")
+        segments, _ = _MODEL[backend].transcribe(wav, word_timestamps=True, vad_filter=True)
+        for seg in segments:
+            for w in seg.words or []:
+                words.append((float(w.start), float(w.end), w.word.strip()))
+    else:
+        if backend == "mlx_whisper":
+            import mlx_whisper
+            _MODEL[backend] = True
+            result = mlx_whisper.transcribe(
+                wav, path_or_hf_repo=f"mlx-community/whisper-{WHISPER_SIZE}-mlx",
+                word_timestamps=True)
+        else:
+            import whisper
+            if backend not in _MODEL:
+                _MODEL[backend] = whisper.load_model(WHISPER_SIZE)
+            result = _MODEL[backend].transcribe(wav, word_timestamps=True)
+        for seg in result.get("segments", []):
+            for w in seg.get("words", []):
+                words.append((float(w["start"]), float(w["end"]), str(w["word"]).strip()))
+    return [w for w in words if w[2] and w[1] > w[0]]

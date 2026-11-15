@@ -302,14 +302,46 @@ def video_size(path, ffmpeg):
     return (int(m.group(1)), int(m.group(2))) if m else (1920, 1080)
 
 
-def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold", lines=None):
+# Standard output sizes (width, height) for each aspect ratio.
+ASPECTS = {"9:16": (1080, 1920),   # Shorts, TikTok, Reels
+           "4:5": (1080, 1350),    # Instagram / Facebook feed
+           "1:1": (1080, 1080),    # square
+           "16:9": (1920, 1080)}   # YouTube
+
+
+def crop_filter(src_w, src_h, aspect="9:16", x=0.5, y=0.5, zoom=1.0):
+    """ffmpeg filter that frames part of the picture at a standard size.
+
+    x, y: where the frame sits, 0 = left/top edge, 1 = right/bottom edge.
+    zoom: 1 = as much of the picture as fits; 2 = twice as close.
+    """
+    out_w, out_h = ASPECTS.get(aspect, ASPECTS["9:16"])
+    ratio = out_w / out_h
+    zoom = max(1.0, min(4.0, float(zoom)))
+    cw = min(src_w, src_h * ratio) / zoom
+    ch = cw / ratio
+    cw, ch = max(2, int(cw) // 2 * 2), max(2, int(ch) // 2 * 2)
+    clamp = lambda v: max(0.0, min(1.0, float(v)))
+    px, py = round((src_w - cw) * clamp(x)), round((src_h - ch) * clamp(y))
+    return (f"crop={cw}:{ch}:{px}:{py},scale={out_w}:{out_h}:flags=lanczos,setsar=1",
+            (out_w, out_h))
+
+
+def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold",
+            lines=None, crop=None):
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
+    crop: optional {"aspect": "9:16", "x": 0.5, "y": 0.5, "zoom": 1} framing.
     """
     if kind in ("mp4", "vertical"):
         filters = []
-        if kind == "vertical":
+        if crop:
+            sw, sh = video_size(raw, ffmpeg)
+            f, size = crop_filter(sw, sh, crop.get("aspect", "9:16"), crop.get("x", 0.5),
+                                  crop.get("y", 0.5), crop.get("zoom", 1.0))
+            filters.append(f)
+        elif kind == "vertical":
             # Crop the centre to 9:16 and scale to 1080x1920.
             filters.append("crop='min(iw,ih*9/16)':ih,scale=1080:1920:flags=lanczos,setsar=1")
             size = (1080, 1920)
@@ -337,7 +369,7 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
 
 
 def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
-               add_captions=False, caption_style="bold"):
+               add_captions=False, caption_style="bold", transcribe="auto"):
     ffmpeg = find_ffmpeg()
     os.makedirs(outdir, exist_ok=True)
     base = safe_name(name or video_title(source))
@@ -345,21 +377,26 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
     suffix = "_vertical" if kind == "vertical" else ""
     made = []
     with tempfile.TemporaryDirectory(prefix="clipmaker_") as work:
+        import captions
         words = []
+        use_speech = False          # transcribe each clip on this computer
         if add_captions and kind in ("mp4", "vertical") and not has_captions_support(ffmpeg):
             print("Your ffmpeg can't draw captions, so these clips won't have them.\n"
                   "  To fix on Mac:  brew install ffmpeg-full\n"
                   "  (Windows: winget install Gyan.FFmpeg)  then run this again.")
+            add_captions = False
         elif add_captions and kind in ("mp4", "vertical"):
-            if is_local_file(source):
-                print("Captions need YouTube captions; local files aren't supported yet. "
-                      "Making clips without captions.")
-            else:
-                import captions
+            if transcribe != "always" and not is_local_file(source):
                 print("Getting word timings for captions...")
                 words = captions.fetch_words(source, ytdlp_cmd(), work)
-                if not words:
-                    print("  This video has no English captions; making clips without them.")
+            if not words:
+                if captions.whisper_backend():
+                    use_speech = True
+                    if transcribe != "always":
+                        print("  No captions on YouTube for this video; transcribing the speech instead.")
+                else:
+                    print("  No captions available, so the clips won't have them.\n  "
+                          + captions.INSTALL_HINT.replace("\n", "\n  "))
         elif add_captions:
             print("Captions only work for MP4 and vertical clips; skipping them.")
         for i, (s, e) in enumerate(clips, 1):
@@ -369,18 +406,22 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
             dest = os.path.join(
                 outdir, f"{base}_{label_time(s)}-{label_time(e)}{suffix}.{ext}")
             clip_words = None
-            if words:
-                import captions
+            if use_speech:
+                try:
+                    clip_words = captions.transcribe(raw, ffmpeg, work, log=lambda m: print("    " + m))
+                except RuntimeError as err:
+                    print(f"    {err}")
+            elif words:
                 clip_words = captions.words_in(words, s, e)
-                if not clip_words:
-                    print("    (no speech in this clip, so no captions)")
+            if add_captions and (use_speech or words) and not clip_words:
+                print("    (no speech in this clip, so no captions)")
             convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, clip_words, caption_style)
             print(f"    saved {dest}")
             made.append(dest)
     return made
 
 
-def auto_select(source, count, min_len, max_len, use_ai):
+def auto_select(source, count, min_len, max_len, use_ai, skip_text=False):
     """Run the highlight finder. Returns (title, clips list from finder)."""
     import finder
 
@@ -390,10 +431,15 @@ def auto_select(source, count, min_len, max_len, use_ai):
         die("--min must be shorter than --max.")
     with tempfile.TemporaryDirectory(prefix="clipfinder_") as work:
         try:
+            fetch = None
+            if skip_text:
+                def fetch(s, e):
+                    sub = tempfile.mkdtemp(dir=work)
+                    return fetch_section(source, s, e, 360, sub, ffmpeg)
             title, picks = finder.find_clips(
                 source, is_local=local, ytdlp=None if local else ytdlp_cmd(),
                 ffmpeg=ffmpeg, workdir=work, count=count,
-                min_len=min_len, max_len=max_len, use_ai=use_ai)
+                min_len=min_len, max_len=max_len, use_ai=use_ai, skip_text=fetch)
         except RuntimeError as err:
             die(explain(str(err)))
     if not picks:
@@ -492,9 +538,14 @@ def main():
     auto.add_argument("--list", action="store_true",
                       help="only list the clips found, don't cut them")
     auto.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    auto.add_argument("--skip-text", action="store_true",
+                      help="skip moments with text on screen (needs Tesseract)")
     cap = p.add_argument_group("captions")
     cap.add_argument("--captions", action="store_true",
                      help="burn in animated word-by-word captions")
+    cap.add_argument("--transcribe", action="store_true",
+                     help="write captions with speech-to-text on this computer, "
+                          "even if YouTube has captions (needs faster-whisper)")
     cap.add_argument("--caption-style", choices=("bold", "clean"), default="bold",
                      help="bold = big yellow-highlight words (default); clean = smaller, sentence case")
     a = p.parse_args()
@@ -507,7 +558,8 @@ def main():
     elif a.auto:
         source = a.source
         kind = "vertical" if a.vertical else "gif" if a.gif else "mp3" if a.mp3 else "mp4"
-        title, picks = auto_select(source, max(1, a.count), a.min, a.max, not a.no_ai)
+        title, picks = auto_select(source, max(1, a.count), a.min, a.max, not a.no_ai,
+                                   a.skip_text)
         if a.list:
             if a.json:
                 import json
@@ -532,7 +584,8 @@ def main():
             p.error(str(err))
 
     made = make_clips(source, clips, kind, a.out, a.name or title, a.quality,
-                      a.gif_width, a.gif_fps, a.captions, a.caption_style)
+                      a.gif_width, a.gif_fps, a.captions, a.caption_style,
+                      "always" if a.transcribe else "auto")
     print(f"\nDone. {len(made)} clip(s) saved in: {os.path.abspath(a.out)}")
 
 

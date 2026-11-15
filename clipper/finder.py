@@ -356,8 +356,25 @@ def claude_clips(cues, curve, title, count, min_len, max_len):
 # ---------------------------------------------------------------- main entry
 
 def find_clips(source, *, is_local, ytdlp, ffmpeg, workdir, count=5,
-               min_len=15, max_len=60, use_ai=True, log=print):
-    """Return (title, clips). Each clip: start, end, score, title, reason."""
+               min_len=15, max_len=60, use_ai=True, log=print, skip_text=None):
+    """Return (title, clips). Each clip: start, end, score, title, reason.
+
+    skip_text: optional fetch(start, end) -> video path. When given, extra
+    moments are found and any with a lot of on-screen text are skipped.
+    """
+    if not skip_text:
+        return _find(source, is_local, ytdlp, ffmpeg, workdir, count,
+                     min_len, max_len, use_ai, log)
+    import textcheck
+    title, cands = _find(source, is_local, ytdlp, ffmpeg, workdir, count * 2 + 2,
+                         min_len, max_len, use_ai, log)
+    if not textcheck.tesseract():
+        log(textcheck.INSTALL_HINT)
+        return title, cands[:count]
+    return title, textcheck.check(cands, skip_text, ffmpeg, workdir, count, log)
+
+
+def _find(source, is_local, ytdlp, ffmpeg, workdir, count, min_len, max_len, use_ai, log):
     cues, curve, info = [], None, {}
     if is_local:
         title = os.path.splitext(os.path.basename(source))[0]

@@ -136,16 +136,39 @@ def safe_name(text, limit=60):
     return re.sub(r"\s+", "_", text)[:limit] or "clip"
 
 
+_FFMPEG = None
+_LIBASS = {}
+
+
+def has_captions_support(ffmpeg):
+    """True if this ffmpeg can draw subtitles (built with libass)."""
+    if ffmpeg not in _LIBASS:
+        r = subprocess.run([ffmpeg, "-hide_banner", "-filters"], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True)
+        _LIBASS[ffmpeg] = bool(re.search(r"^\s*\S+\s+subtitles\s", r.stdout, re.M))
+    return _LIBASS[ffmpeg]
+
+
 def find_ffmpeg():
-    exe = shutil.which("ffmpeg")
-    if exe:
-        return exe
+    """Find ffmpeg, preferring a build that can draw captions.
+
+    Homebrew's plain "ffmpeg" can't draw captions; "ffmpeg-full" can, but it
+    isn't put on the PATH, so look for it in Homebrew's folders too.
+    """
+    global _FFMPEG
+    if _FFMPEG:
+        return _FFMPEG
     here = os.path.dirname(os.path.abspath(__file__))
+    candidates = ["/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+                  "/usr/local/opt/ffmpeg-full/bin/ffmpeg",
+                  shutil.which("ffmpeg")]
     for name in ("ffmpeg", "ffmpeg.exe"):
-        for cand in (os.path.join(here, name), os.path.join(here, "bin", name)):
-            if os.path.isfile(cand):
-                return cand
-    die("ffmpeg was not found. Install it (see README) and try again.")
+        candidates += [os.path.join(here, name), os.path.join(here, "bin", name)]
+    found = [c for c in candidates if c and os.path.isfile(c)]
+    if not found:
+        die("ffmpeg was not found. Install it (see README) and try again.")
+    _FFMPEG = next((c for c in found if has_captions_support(c)), found[0])
+    return _FFMPEG
 
 
 # Set by --browser: borrow that browser's YouTube sign-in (for age-restricted
@@ -319,7 +342,11 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
     made = []
     with tempfile.TemporaryDirectory(prefix="clipmaker_") as work:
         words = []
-        if add_captions and kind in ("mp4", "vertical"):
+        if add_captions and kind in ("mp4", "vertical") and not has_captions_support(ffmpeg):
+            print("Your ffmpeg can't draw captions, so these clips won't have them.\n"
+                  "  To fix on Mac:  brew install ffmpeg-full\n"
+                  "  (Windows: winget install Gyan.FFmpeg)  then run this again.")
+        elif add_captions and kind in ("mp4", "vertical"):
             if is_local_file(source):
                 print("Captions need YouTube captions; local files aren't supported yet. "
                       "Making clips without captions.")
@@ -460,6 +487,7 @@ def main():
                       help="don't use Claude, even if an API key is set")
     auto.add_argument("--list", action="store_true",
                       help="only list the clips found, don't cut them")
+    auto.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     cap = p.add_argument_group("captions")
     cap.add_argument("--captions", action="store_true",
                      help="burn in animated word-by-word captions")
@@ -477,6 +505,9 @@ def main():
         kind = "vertical" if a.vertical else "gif" if a.gif else "mp3" if a.mp3 else "mp4"
         title, picks = auto_select(source, max(1, a.count), a.min, a.max, not a.no_ai)
         if a.list:
+            if a.json:
+                import json
+                print("@@PICKS@@ " + json.dumps({"title": title, "clips": picks}), flush=True)
             return
         clips = [(c["start"], c["end"]) for c in picks]
     else:

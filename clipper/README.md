@@ -73,6 +73,8 @@ python clipper/clip.py "LINK" --auto --vertical --captions
 - `--caption-style bold` (default): big uppercase words, 2–3 at a time, with the spoken word popping in yellow.
 - `--caption-style clean`: smaller, normal case, with the spoken word in green.
 
+**Mac:** Homebrew's normal ffmpeg can't draw captions. Run `brew install ffmpeg-full` once; the tool finds it automatically.
+
 Captions use the video's YouTube captions, so they work for any video with English captions, including auto-generated ones. They don't work on files from your computer yet.
 
 ## Make a clip by choosing the times yourself

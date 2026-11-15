@@ -139,14 +139,42 @@ def find_ffmpeg():
     die("ffmpeg was not found. Install it (see README) and try again.")
 
 
+# Set by --browser: borrow that browser's YouTube sign-in (for age-restricted
+# videos, or when YouTube asks to "confirm you're not a bot").
+BROWSER = None
+
+
 def ytdlp_cmd():
+    extra = ["--cookies-from-browser", BROWSER] if BROWSER else []
     if shutil.which("yt-dlp"):
-        return ["yt-dlp"]
+        return ["yt-dlp"] + extra
     try:
         import yt_dlp  # noqa: F401
-        return [sys.executable, "-m", "yt_dlp"]
+        return [sys.executable, "-m", "yt_dlp"] + extra
     except ImportError:
-        die("yt-dlp is not installed. Run:  python -m pip install -U yt-dlp")
+        die("yt-dlp is not installed. Run:  python3 -m pip install -U yt-dlp")
+
+
+def explain(msg):
+    """Add a plain-English fix to common yt-dlp errors."""
+    low = msg.lower()
+    if "confirm your age" in low or "age-restricted" in low or "inappropriate for some users" in low:
+        tip = ("This video is age-restricted. Sign in to YouTube in Chrome, then add "
+               "--browser chrome to the command (or --browser safari / firefox).")
+    elif "not a bot" in low or "sign in to confirm" in low:
+        tip = ("YouTube wants a signed-in user. Sign in to YouTube in Chrome, then add "
+               "--browser chrome to the command.")
+    elif "cookies" in low and BROWSER:
+        tip = (f"Couldn't read {BROWSER}'s sign-in. Close {BROWSER} completely and try again. "
+               "For Safari, give Terminal Full Disk Access in System Settings > "
+               "Privacy & Security, or use --browser chrome.")
+    elif "video unavailable" in low or "private video" in low:
+        tip = "The video is private, deleted, or blocked in your country. Check the link."
+    elif "403" in low or "unable to extract" in low or "requested format" in low:
+        tip = "YouTube changed something. Update yt-dlp:  python3 -m pip install -U yt-dlp"
+    else:
+        tip = ("Check the link, then update yt-dlp:  python3 -m pip install -U yt-dlp")
+    return f"{msg}\n\nHow to fix: {tip}"
 
 
 def run(cmd, quiet=True, cwd=None):
@@ -173,7 +201,7 @@ def video_title(source):
     )
     if r.returncode != 0:
         msg = (r.stderr or "").strip().splitlines()
-        die("could not read that video. " + (msg[-1] if msg else ""))
+        die(explain("could not read that video. " + (msg[-1] if msg else "")))
     return r.stdout.strip().splitlines()[0] if r.stdout.strip() else "clip"
 
 
@@ -317,7 +345,7 @@ def auto_select(source, count, min_len, max_len, use_ai):
                 ffmpeg=ffmpeg, workdir=work, count=count,
                 min_len=min_len, max_len=max_len, use_ai=use_ai)
         except RuntimeError as err:
-            die(str(err))
+            die(explain(str(err)))
     if not picks:
         die("no clips found.")
     print(f"\nBest moments in \"{title}\":")
@@ -401,6 +429,8 @@ def main():
                    help="max video height to download (default: 1080)")
     p.add_argument("--gif-width", type=int, default=480, help="GIF width (default: 480)")
     p.add_argument("--gif-fps", type=int, default=12, help="GIF frames/sec (default: 12)")
+    p.add_argument("--browser", choices=("chrome", "safari", "firefox", "edge", "brave"),
+                   help="use this browser's YouTube sign-in (for age-restricted videos)")
     auto = p.add_argument_group("automatic clip finding")
     auto.add_argument("--auto", action="store_true",
                       help="find the best moments automatically")
@@ -417,6 +447,8 @@ def main():
     cap.add_argument("--caption-style", choices=("bold", "clean"), default="bold",
                      help="bold = big yellow-highlight words (default); clean = smaller, sentence case")
     a = p.parse_args()
+    global BROWSER
+    BROWSER = a.browser
 
     title = None
     if not a.source:

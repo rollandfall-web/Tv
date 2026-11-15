@@ -18,6 +18,8 @@ Cuts clips out of a YouTube video and saves them as MP4, as a vertical video for
 
 If clips stop downloading, YouTube has changed something. Run the step 3 command again to update yt-dlp.
 
+**Age-restricted videos** (like game trailers) or a **"confirm you're not a bot"** error: sign in to YouTube in Chrome, then add `--browser chrome` to the command. The tool borrows Chrome's sign-in. Safari and Firefox work too (`--browser safari`), but Safari needs Terminal to have Full Disk Access (System Settings > Privacy & Security).
+
 ## Let it find the best moments (like Opus Clip)
 
 ```bash

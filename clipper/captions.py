@@ -24,7 +24,7 @@ def fetch_words(source, ytdlp, workdir):
     """Download YouTube captions and return [(start, end, word)] in seconds."""
     base = os.path.join(workdir, "capwords")
     subprocess.run(
-        ytdlp + ["--no-playlist", "--skip-download", "--write-subs", "--write-auto-subs",
+        ytdlp + ["--no-playlist", "--skip-download", "--ignore-no-formats-error", "--write-subs", "--write-auto-subs",
                  "--sub-langs", "en.*,en,-live_chat", "--sub-format", "json3",
                  "-o", base, source],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

@@ -11,10 +11,12 @@ Cuts clips out of a YouTube video and saves them as MP4, as a vertical video for
    - **Windows:** `winget install ffmpeg`
    - **Mac:** `brew install ffmpeg`
    - **Linux:** `sudo apt install ffmpeg`
-3. Install yt-dlp:
+3. Install yt-dlp and Deno (a helper YouTube now requires):
    ```bash
-   python -m pip install -U yt-dlp
+   python -m pip install -U "yt-dlp[default]" certifi
    ```
+   - **Windows:** `winget install DenoLand.Deno`
+   - **Mac:** `brew install deno`
 
 If clips stop downloading, YouTube has changed something. Run the step 3 command again to update yt-dlp.
 

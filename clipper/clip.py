@@ -183,7 +183,13 @@ def explain(msg):
                "Privacy & Security, or use --browser chrome.")
     elif "video unavailable" in low or "private video" in low:
         tip = "The video is private, deleted, or blocked in your country. Check the link."
-    elif "403" in low or "unable to extract" in low or "requested format" in low:
+    elif "requested format" in low or "no video formats" in low or "signature" in low or "n challenge" in low:
+        tip = ("yt-dlp needs the Deno helper to unlock YouTube's video streams. Run:\n"
+               "  Mac:     brew install deno\n"
+               "  Windows: winget install DenoLand.Deno\n"
+               "  then:    python3 -m pip install -U \"yt-dlp[default]\"\n"
+               "and open a new Terminal window before trying again.")
+    elif "403" in low or "unable to extract" in low:
         tip = "YouTube changed something. Update yt-dlp:  python3 -m pip install -U yt-dlp"
     else:
         tip = ("Check the link, then update yt-dlp:  python3 -m pip install -U yt-dlp")
@@ -209,7 +215,7 @@ def video_title(source):
     if is_local_file(source):
         return os.path.splitext(os.path.basename(source))[0]
     r = subprocess.run(
-        ytdlp_cmd() + ["--no-playlist", "--skip-download", "--print", "title", source],
+        ytdlp_cmd() + ["--no-playlist", "--skip-download", "--ignore-no-formats-error", "--print", "title", source],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     if r.returncode != 0:

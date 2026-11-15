@@ -23,7 +23,7 @@ CLAUDE_MODEL = "claude-opus-5-5"
 
 def video_info(source, ytdlp):
     """Full yt-dlp metadata (duration, title, heatmap, captions)."""
-    r = subprocess.run(ytdlp + ["--no-playlist", "-J", source],
+    r = subprocess.run(ytdlp + ["--no-playlist", "--ignore-no-formats-error", "-J", source],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode != 0:
         msg = (r.stderr or "").strip().splitlines()
@@ -50,7 +50,7 @@ def download_transcript(source, ytdlp, workdir):
     """YouTube captions (manual first, then auto) as [(start, end, text)]."""
     base = os.path.join(workdir, "subs")
     subprocess.run(
-        ytdlp + ["--no-playlist", "--skip-download", "--write-subs", "--write-auto-subs",
+        ytdlp + ["--no-playlist", "--skip-download", "--ignore-no-formats-error", "--write-subs", "--write-auto-subs",
                  "--sub-langs", "en.*,en,-live_chat", "--sub-format", "json3/vtt/best",
                  "-o", base, source],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

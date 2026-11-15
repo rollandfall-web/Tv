@@ -58,6 +58,19 @@ Cut points snap to the edges of caption lines, so clips don't start or end mid-w
 
 Without a key, it uses the free method (steps 1 and 3). To skip the AI even with a key set, add `--no-ai`.
 
+## Animated captions
+
+Add `--captions` to burn in word-by-word captions, the style most Shorts and clipping campaigns use:
+
+```bash
+python clipper/clip.py "LINK" --auto --vertical --captions
+```
+
+- `--caption-style bold` (default): big uppercase words, 2–3 at a time, with the spoken word popping in yellow.
+- `--caption-style clean`: smaller, normal case, with the spoken word in green.
+
+Captions use the video's YouTube captions, so they work for any video with English captions, including auto-generated ones. They don't work on files from your computer yet.
+
 ## Make a clip by choosing the times yourself
 
 The easiest way: run the script with nothing after it, and it asks you questions.

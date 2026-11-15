@@ -117,3 +117,4 @@ When you are done, turn **USB/ADB debugging** back off on the TV.
 | `scripts/android-tv-speedup.sh` | Speed-up script for Android TV, Google TV, and Fire TV. |
 | `clipper/clip.py` | YouTube clip maker that can find the best moments by itself. See [`clipper/README.md`](clipper/README.md). |
 | `clipper/finder.py` | Picks the best moments for `clip.py --auto`. |
+| `clipper/captions.py` | Animated captions for `clip.py --captions`. |

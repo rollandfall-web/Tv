@@ -20,6 +20,7 @@ Usage:
   python clip.py URL --auto                         find the best moments for you
   python clip.py URL --auto --count 3 --vertical    top 3, ready for Shorts
   python clip.py URL --auto --list                  only show the picks, cut nothing
+  python clip.py URL --auto --vertical --captions   Shorts with animated captions
 
 Needs: Python 3.8+, ffmpeg, and yt-dlp (pip install yt-dlp).
 For AI scoring in --auto mode: pip install anthropic, and set ANTHROPIC_API_KEY.
@@ -148,9 +149,9 @@ def ytdlp_cmd():
         die("yt-dlp is not installed. Run:  python -m pip install -U yt-dlp")
 
 
-def run(cmd, quiet=True):
+def run(cmd, quiet=True, cwd=None):
     result = subprocess.run(
-        cmd,
+        cmd, cwd=cwd,
         stdout=subprocess.PIPE if quiet else None,
         stderr=subprocess.PIPE if quiet else None,
         text=True,
@@ -220,15 +221,39 @@ def fetch_section(source, start, end, quality, workdir, ffmpeg):
     return out
 
 
-def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps):
-    if kind == "mp4":
-        shutil.move(raw, dest)
-    elif kind == "vertical":
-        # Crop the centre to 9:16 and scale to 1080x1920.
-        run([ffmpeg, "-y", "-i", raw,
-             "-vf", "crop='min(iw,ih*9/16)':ih,scale=1080:1920:flags=lanczos,setsar=1",
+def video_size(path, ffmpeg):
+    r = subprocess.run([ffmpeg, "-hide_banner", "-i", path], stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, text=True)
+    m = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", r.stderr)
+    return (int(m.group(1)), int(m.group(2))) if m else (1920, 1080)
+
+
+def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold"):
+    """Turn the downloaded section into the final file.
+
+    words: caption words in clip time, burned in for mp4/vertical output.
+    """
+    if kind in ("mp4", "vertical"):
+        filters = []
+        if kind == "vertical":
+            # Crop the centre to 9:16 and scale to 1080x1920.
+            filters.append("crop='min(iw,ih*9/16)':ih,scale=1080:1920:flags=lanczos,setsar=1")
+            size = (1080, 1920)
+        else:
+            size = video_size(raw, ffmpeg)
+        if words:
+            import captions
+            ass = os.path.join(os.path.dirname(os.path.abspath(raw)), "captions.ass")
+            captions.write_ass(ass, words, size[0], size[1], style)
+            # Bare file name + cwd avoids ffmpeg's path escaping rules (Windows "C:").
+            filters.append("subtitles=captions.ass")
+        if not filters:
+            shutil.move(raw, dest)
+            return
+        run([ffmpeg, "-y", "-i", os.path.abspath(raw), "-vf", ",".join(filters),
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-             "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", dest])
+             "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+             os.path.abspath(dest)], cwd=os.path.dirname(os.path.abspath(raw)))
     elif kind == "gif":
         vf = (f"fps={gif_fps},scale={gif_width}:-1:flags=lanczos,split[a][b];"
               f"[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5")
@@ -237,7 +262,8 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps):
         run([ffmpeg, "-y", "-i", raw, "-vn", "-c:a", "libmp3lame", "-q:a", "2", dest])
 
 
-def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps):
+def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
+               add_captions=False, caption_style="bold"):
     ffmpeg = find_ffmpeg()
     os.makedirs(outdir, exist_ok=True)
     base = safe_name(name or video_title(source))
@@ -245,13 +271,32 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps):
     suffix = "_vertical" if kind == "vertical" else ""
     made = []
     with tempfile.TemporaryDirectory(prefix="clipmaker_") as work:
+        words = []
+        if add_captions and kind in ("mp4", "vertical"):
+            if is_local_file(source):
+                print("Captions need YouTube captions; local files aren't supported yet. "
+                      "Making clips without captions.")
+            else:
+                import captions
+                print("Getting word timings for captions...")
+                words = captions.fetch_words(source, ytdlp_cmd(), work)
+                if not words:
+                    print("  This video has no English captions; making clips without them.")
+        elif add_captions:
+            print("Captions only work for MP4 and vertical clips; skipping them.")
         for i, (s, e) in enumerate(clips, 1):
             print(f"\n[{i}/{len(clips)}] {fmt_time(s)} -> {fmt_time(e)} "
                   f"({e - s:.1f}s)")
             raw = fetch_section(source, s, e, quality, work, ffmpeg)
             dest = os.path.join(
                 outdir, f"{base}_{label_time(s)}-{label_time(e)}{suffix}.{ext}")
-            convert(raw, dest, kind, ffmpeg, gif_width, gif_fps)
+            clip_words = None
+            if words:
+                import captions
+                clip_words = captions.words_in(words, s, e)
+                if not clip_words:
+                    print("    (no speech in this clip, so no captions)")
+            convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, clip_words, caption_style)
             print(f"    saved {dest}")
             made.append(dest)
     return made
@@ -332,7 +377,10 @@ def interactive():
     print("Save as: 1) MP4   2) Vertical MP4 for Shorts/Reels/TikTok   3) GIF   4) MP3")
     choice = ask("Pick 1-4", "1")
     kind = {"1": "mp4", "2": "vertical", "3": "gif", "4": "mp3"}.get(choice, "mp4")
-    return source, clips, kind, title
+    caps = False
+    if kind in ("mp4", "vertical") and not is_local_file(source):
+        caps = ask("Add animated captions? (y/n)", "y").lower().startswith("y")
+    return source, clips, kind, title, caps
 
 
 def main():
@@ -363,11 +411,16 @@ def main():
                       help="don't use Claude, even if an API key is set")
     auto.add_argument("--list", action="store_true",
                       help="only list the clips found, don't cut them")
+    cap = p.add_argument_group("captions")
+    cap.add_argument("--captions", action="store_true",
+                     help="burn in animated word-by-word captions")
+    cap.add_argument("--caption-style", choices=("bold", "clean"), default="bold",
+                     help="bold = big yellow-highlight words (default); clean = smaller, sentence case")
     a = p.parse_args()
 
     title = None
     if not a.source:
-        source, clips, kind, title = interactive()
+        source, clips, kind, title, a.captions = interactive()
     elif a.auto:
         source = a.source
         kind = "vertical" if a.vertical else "gif" if a.gif else "mp3" if a.mp3 else "mp4"
@@ -393,7 +446,7 @@ def main():
             p.error(str(err))
 
     made = make_clips(source, clips, kind, a.out, a.name or title, a.quality,
-                      a.gif_width, a.gif_fps)
+                      a.gif_width, a.gif_fps, a.captions, a.caption_style)
     print(f"\nDone. {len(made)} clip(s) saved in: {os.path.abspath(a.out)}")
 
 

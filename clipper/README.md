@@ -138,3 +138,16 @@ Clips are saved in a `clips` folder. Use `-o another-folder` to save somewhere e
 Times can be written as `83`, `1:23`, `1:02:03` or `1m23s`. If your link has a start time in it (a "Share > Start at" link), you can leave out the start time.
 
 **Vertical clips** keep the middle of the picture and cut off the sides. Keep the action centred.
+
+## Use it with StarNet agents
+
+[StarNet](https://starnetos.com) agents can run Clip Maker for you, from the station or from your phone on Telegram.
+
+1. **Move the folder somewhere permanent (optional but recommended):** rename the unzipped folder to `ClipMaker` and put it in your home folder, so it's at `~/ClipMaker`.
+2. **Give your agent a terminal:** in StarNet's build mode, place a **Workbench** in the agent's room.
+3. **Add the skill:** in StarNet, open **CONNECT › ABILITIES › SKILL MARKET › ADD FROM A LINK**, paste this link, click **INSPECT**, then install:
+   `https://github.com/rollandfall-web/Tv/blob/claude/youtube-clip-maker-lyx2h0/clipper/skills/clip-maker/SKILL.md`
+4. **Ask for clips** in COMMS or Telegram, for example: "Make 3 Shorts with captions from LINK, focus on the car chases."
+
+To clip on a schedule, save that request as a recipe and click **MAKE ROUTINE**, then turn scheduling on.
+

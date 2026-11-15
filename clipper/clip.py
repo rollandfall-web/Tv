@@ -158,7 +158,12 @@ def ytdlp_cmd():
 def explain(msg):
     """Add a plain-English fix to common yt-dlp errors."""
     low = msg.lower()
-    if "confirm your age" in low or "age-restricted" in low or "inappropriate for some users" in low:
+    if "certificate_verify_failed" in low or "certificate verify failed" in low:
+        tip = ("Python can't check website certificates yet (common on Mac). Run:\n"
+               "  open \"/Applications/Python 3.14/Install Certificates.command\"\n"
+               "  python3 -m pip install -U certifi yt-dlp\n"
+               "(Change 3.14 to your Python version; see the folder in Applications.)")
+    elif "confirm your age" in low or "age-restricted" in low or "inappropriate for some users" in low:
         tip = ("This video is age-restricted. Sign in to YouTube in Chrome, then add "
                "--browser chrome to the command (or --browser safari / firefox).")
     elif "not a bot" in low or "sign in to confirm" in low:

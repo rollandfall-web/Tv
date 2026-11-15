@@ -116,21 +116,77 @@ def chunk_words(words, max_words):
     return chunks
 
 
-def build_ass(words, width, height, style="bold"):
-    """ASS subtitle text for words already shifted to clip time."""
-    vertical = height > width
-    if style == "bold":
-        size = int(min(width * (0.095 if vertical else 0.06), height * 0.09))
-        max_words, upper = (3 if vertical else 4), True
-        active = r"{\c&H00FFFF&\fscx112\fscy112}"   # yellow, a bit bigger
-        outline, shadow = max(4, size // 12), 2
-    else:
-        size = int(min(width * (0.06 if vertical else 0.045), height * 0.07))
-        max_words, upper = 6, False
-        active = r"{\c&H55FF55&}"                     # green
-        outline, shadow = max(3, size // 16), 1
-    margin_v = int(height * (0.28 if vertical else 0.08))
-    margin_h = int(width * 0.06)
+PRESETS = {
+    # size = % of video height, outline = % of font size, position = % from bottom
+    "bold": dict(font="Arial", bold=True, size=5.0, uppercase=True, words_per_line=3,
+                 color="#FFFFFF", highlight="#FFE000", highlight_mode="word", pop=True,
+                 outline=9, outline_color="#000000", shadow=True, text_opacity=100,
+                 box=False, box_color="#000000", box_opacity=60, position=28),
+    "clean": dict(font="Arial", bold=True, size=3.4, uppercase=False, words_per_line=6,
+                  color="#FFFFFF", highlight="#55FF55", highlight_mode="word", pop=False,
+                  outline=6, outline_color="#000000", shadow=True, text_opacity=100,
+                  box=False, box_color="#000000", box_opacity=60, position=28),
+}
+
+
+def preset(name, vertical=True):
+    """A full style dict for a preset, adjusted for landscape video."""
+    st = dict(PRESETS.get(name, PRESETS["bold"]))
+    if not vertical:
+        st["size"] = round(st["size"] * 1.9, 1)
+        st["words_per_line"] = st["words_per_line"] + 1
+        st["position"] = 8
+    return st
+
+
+def ass_color(hex_rgb, opacity=100):
+    """'#RRGGBB' + opacity % -> ASS '&HAABBGGRR' (ASS alpha 00 = solid)."""
+    h = (hex_rgb or "#FFFFFF").lstrip("#")
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", h):
+        h = "FFFFFF"
+    alpha = round(255 * (1 - max(0, min(100, opacity)) / 100))
+    return f"&H{alpha:02X}{h[4:6]}{h[2:4]}{h[0:2]}".upper()
+
+
+def norm_words(words):
+    """Accept (s, e, w) or (s, e, w, emph) tuples or dicts; return dicts."""
+    out = []
+    for w in words:
+        if isinstance(w, dict):
+            out.append({"s": float(w["s"]), "e": float(w["e"]), "w": str(w["w"]),
+                        "emph": bool(w.get("emph"))})
+        else:
+            out.append({"s": float(w[0]), "e": float(w[1]), "w": str(w[2]),
+                        "emph": bool(w[3]) if len(w) > 3 else False})
+    return [w for w in out if w["w"].strip()]
+
+
+def build_ass(words, width, height, style="bold", lines=None):
+    """ASS subtitle text for words already shifted to clip time.
+
+    style: a preset name ("bold"/"clean") or a full style dict (see PRESETS).
+    lines: optional list of word-index lists giving the caption lines; by
+           default words are grouped automatically (words_per_line).
+    """
+    if isinstance(style, str):
+        style = preset(style, vertical=height > width)
+    st = dict(PRESETS["bold"], **style)
+    words = norm_words(words)
+
+    size = max(8, round(height * float(st["size"]) / 100))
+    outline = round(size * float(st["outline"]) / 100, 1)
+    shadow = max(1, size // 30) if st["shadow"] else 0
+    margin_v = round(height * float(st["position"]) / 100)
+    margin_h = round(width * 0.06)
+    op = float(st["text_opacity"])
+    font = re.sub(r"[,\n]", "", str(st["font"])) or "Arial"
+    bold = -1 if st["bold"] else 0
+    fill = ass_color(st["color"], op)
+    edge = ass_color(st["outline_color"], op)
+    shade = ass_color("#000000", op * 0.5)
+    hl = "&H" + ass_color(st["highlight"])[4:] + "&"   # colour only; \\c keeps alpha
+    box = ass_color(st["box_color"], float(st["box_opacity"]))
+    box_pad = max(4, size // 5)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -141,27 +197,59 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,Arial,{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{margin_h},{margin_h},{margin_v},1
+Style: Cap,{font},{size},{fill},{fill},{edge},{shade},{bold},0,0,0,100,100,0,0,1,{outline},{shadow},2,{margin_h},{margin_h},{margin_v},1
+Style: Box,{font},{size},&HFF000000,&HFF000000,{box},&HFF000000,{bold},0,0,0,100,100,0,0,3,{box_pad},0,2,{margin_h},{margin_h},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    lines = []
-    reset = r"{\r}"
-    for chunk in chunk_words(words, max_words):
-        texts = [clean_word(w[2].upper() if upper else w[2]) for w in chunk]
-        for i, (s, _, _) in enumerate(chunk):
-            # Show this line from this word's start until the next word starts
-            # (or the line ends), with the current word highlighted.
-            e = chunk[i + 1][0] if i + 1 < len(chunk) else chunk[-1][1]
-            if e - s < 0.02:
-                continue
-            parts = [f"{active}{t}{reset}" if j == i else t for j, t in enumerate(texts)]
-            lines.append(f"Dialogue: 0,{ass_time(s)},{ass_time(e)},Cap,,0,0,0,,{' '.join(parts)}")
-    return header + "\n".join(lines) + "\n"
+    if lines is None:
+        groups = chunk_words([(w["s"], w["e"], w["w"]) for w in words],
+                             max(1, int(st["words_per_line"])))
+        lines, i = [], 0
+        for g in groups:
+            lines.append(list(range(i, i + len(g))))
+            i += len(g)
+
+    def text_of(w):
+        t = clean_word(w["w"])
+        return t.upper() if st["uppercase"] else t
+
+    pop = r"\fscx112\fscy112" if st["pop"] else ""
+    events = []
+    for idx in lines:
+        chunk = [words[i] for i in idx if 0 <= i < len(words)]
+        if not chunk:
+            continue
+        texts = [text_of(w) for w in chunk]
+        start, end = chunk[0]["s"], max(w["e"] for w in chunk)
+        if end - start < 0.02:
+            continue
+        if st["box"]:
+            events.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Box,,0,0,0,,"
+                          + " ".join(texts))
+        if st["highlight_mode"] == "word":
+            spans = []
+            for i, w in enumerate(chunk):
+                e = chunk[i + 1]["s"] if i + 1 < len(chunk) else end
+                if e - w["s"] >= 0.02:
+                    spans.append((w["s"], e, i))
+        else:
+            spans = [(start, end, None)]
+        for s, e, active in spans:
+            parts = []
+            for j, (w, t) in enumerate(zip(chunk, texts)):
+                if j == active:
+                    parts.append(f"{{\\c{hl}{pop}}}{t}{{\\r}}")
+                elif w["emph"]:
+                    parts.append(f"{{\\c{hl}}}{t}{{\\r}}")
+                else:
+                    parts.append(t)
+            events.append(f"Dialogue: 1,{ass_time(s)},{ass_time(e)},Cap,,0,0,0,,{' '.join(parts)}")
+    return header + "\n".join(events) + "\n"
 
 
-def write_ass(path, words, width, height, style="bold"):
+def write_ass(path, words, width, height, style="bold", lines=None):
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(build_ass(words, width, height, style))
+        fh.write(build_ass(words, width, height, style, lines))
     return path

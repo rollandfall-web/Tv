@@ -271,7 +271,11 @@ def fetch_section(source, start, end, quality, workdir, ffmpeg):
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out])
         return out
 
-    fmt = (f"bv*[height<={quality}][ext=mp4]+ba[ext=m4a]/"
+    # Prefer H.264 (avc1): it plays everywhere, including browser previews.
+    # Twitch serves video and audio together, so the second choice covers it.
+    fmt = (f"bv*[height<={quality}][vcodec^=avc1]+ba[ext=m4a]/"
+           f"b[height<={quality}][vcodec^=avc1]/"
+           f"bv*[height<={quality}][ext=mp4]+ba[ext=m4a]/"
            f"bv*[height<={quality}]+ba/b[height<={quality}]/b")
     cmd = ytdlp_cmd() + [
         "--no-playlist", "--quiet", "--no-warnings", "--progress",
@@ -298,7 +302,7 @@ def video_size(path, ffmpeg):
     return (int(m.group(1)), int(m.group(2))) if m else (1920, 1080)
 
 
-def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold"):
+def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold", lines=None):
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
@@ -314,7 +318,7 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
         if words:
             import captions
             ass = os.path.join(os.path.dirname(os.path.abspath(raw)), "captions.ass")
-            captions.write_ass(ass, words, size[0], size[1], style)
+            captions.write_ass(ass, words, size[0], size[1], style, lines)
             # Bare file name + cwd avoids ffmpeg's path escaping rules (Windows "C:").
             filters.append("subtitles=captions.ass")
         if not filters:

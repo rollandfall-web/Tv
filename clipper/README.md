@@ -4,6 +4,20 @@ Cuts clips out of a YouTube video and saves them as MP4, as a vertical video for
 
 > Only clip videos you own or have permission to use. Downloading other people's videos may break YouTube's terms of service.
 
+## The easy way: the Clip Maker app
+
+After the one-time setup below, **double-click `Clip Maker.command`** (Mac) or **`Clip Maker.bat`** (Windows) in this folder. A small window opens (leave it open) and Clip Maker opens in your web browser. There, you:
+
+1. Paste a YouTube or Twitch link and click **Find best moments** (or type a start and end time).
+2. Click **Edit & make** on a moment.
+3. Watch the preview and edit the captions:
+   - **Words:** fix any wrong word, delete lines, or add your own lines. Wrap a word in `*stars*` to highlight it.
+   - **Look:** font, size, position, text, highlight and outline colors, bold, uppercase, pop, shadow, words per line.
+   - **Opacity:** text opacity, plus a background box with its own color and opacity.
+4. Click **Make clip**. Clips are saved in **Movies/Clip Maker** (Videos/Clip Maker on Windows).
+
+Close the small window to quit. The first time on a Mac, if it says the file can't be opened, right-click it, choose **Open**, then **Open** again.
+
 ## Set up (once)
 
 1. Install [Python 3](https://www.python.org/downloads/). On Windows, tick **Add Python to PATH** during install.

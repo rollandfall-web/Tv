@@ -199,6 +199,26 @@ def fmt(t):
     return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
 
 
+def damp_edges(curve, duration):
+    """Turn down the opening and the ending before picking peaks.
+
+    Nearly everyone watches a video's first seconds, so YouTube's "Most
+    replayed" graph is usually highest right at the start, and intros and
+    end screens are often the loudest parts. Without this, clips pile up at
+    the beginning. The first and last few percent ramp from 25% weight up
+    to full weight; the curve is then rescaled so its top is 1 again.
+    """
+    n = len(curve)
+    edge = int(min(45, max(8, 0.04 * duration)))
+    out = list(curve)
+    for i in range(n):
+        dist = min(i, n - 1 - i)
+        if dist < edge:
+            out[i] *= 0.25 + 0.75 * dist / edge
+    top = max(out) or 1.0
+    return [v / top for v in out]
+
+
 def signal_clips(curve, label, duration, count, min_len, max_len, cues):
     """Free mode: grow a clip around each peak of the curve.
 
@@ -208,6 +228,7 @@ def signal_clips(curve, label, duration, count, min_len, max_len, cues):
     n = min(len(curve), int(duration) + 1)
     if n <= 0:
         return []
+    curve = damp_edges(curve[:n], duration)
     used = [False] * n
     out = []
     for peak in sorted(range(n), key=lambda i: curve[i], reverse=True):

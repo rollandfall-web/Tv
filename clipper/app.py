@@ -621,7 +621,10 @@ function status(el, msg, kind){ el.style.display = msg ? "block" : "none"; el.cl
   el.innerHTML = (kind==="busy" ? '<span class="spin"></span>' : "") + escapeHtml(msg || ""); }
 
 async function runJob(path, body, el){
-  const {job} = await api(path, body);
+  await READY;
+  let job;
+  try { ({job} = await api(path, body)); }
+  catch (e) { status(el, "Couldn't reach Clip Maker. Is its window still open?", "err"); throw e; }
   return new Promise((resolve, reject) => {
     const tick = async () => {
       const j = await api("/api/job/" + job);
@@ -639,6 +642,7 @@ $("#findBtn").onclick = async () => {
   const url = $("#url").value.trim(); if(!url) return $("#url").focus();
   $("#findBtn").disabled = true;
   try {
+    await READY;
     const r = await runJob("/api/find", {url, browser:$("#browser").value, count:$("#count").value, min:$("#minl").value,
       max:$("#maxl").value, skip_text:$("#skipText").checked && S.info.tesseract}, $("#findStatus"));
     S.title = r.title; showPicks(r.clips);
@@ -889,7 +893,7 @@ $("#makeBtn").onclick = async () => {
 $("#openBtn").onclick = () => api("/api/open", {});
 
 // ---------------------------------------------------------------- start
-(async () => {
+const READY = (async () => {
   S.info = await api("/api/info");
   loadStyle(S.info.presets.bold.vertical);
   const w = [];

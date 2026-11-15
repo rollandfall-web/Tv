@@ -9,14 +9,29 @@ Cuts clips out of a YouTube video and saves them as MP4, as a vertical video for
 After the one-time setup below, **double-click `Clip Maker.command`** (Mac) or **`Clip Maker.bat`** (Windows) in this folder. A small window opens (leave it open) and Clip Maker opens in your web browser. There, you:
 
 1. Paste a YouTube or Twitch link and click **Find best moments** (or type a start and end time).
+   - **Add captions:** turn this off if the video already has subtitles burned in.
+   - **Skip moments with text already on screen:** leaves out parts with subtitles, captions or big titles. Text that is always there, like a game HUD or a streamer's name, is ignored.
 2. Click **Edit & make** on a moment.
-3. Watch the preview and edit the captions:
-   - **Words:** fix any wrong word, delete lines, or add your own lines. Wrap a word in `*stars*` to highlight it.
-   - **Look:** font, size, position, text, highlight and outline colors, bold, uppercase, pop, shadow, words per line.
+3. Frame it:
+   - **Size:** 9:16 (Shorts, TikTok, Reels), 4:5 (Instagram feed), 1:1 (square) or 16:9 (YouTube).
+   - **Drag the video** to choose what's in frame, and use **Zoom** to get closer.
+   - **Start / End:** nudge them, or play and click **Set to playhead**. You can go up to 10 seconds past the picked moment.
+4. Edit the captions:
+   - **Words:** they come from YouTube's captions, or from **Transcribe speech** (speech-to-text on your computer). Fix any word, delete lines, or add your own. Wrap a word in `*stars*` to highlight it.
+   - **Style:** font, size, position, colors, outline, bold, uppercase, pop, shadow, words per line.
    - **Opacity:** text opacity, plus a background box with its own color and opacity.
-4. Click **Make clip**. Clips are saved in **Movies/Clip Maker** (Videos/Clip Maker on Windows).
+5. Click **Make clip**. Clips are saved in **Movies/Clip Maker** (Videos/Clip Maker on Windows).
 
 Close the small window to quit. The first time on a Mac, if it says the file can't be opened, right-click it, choose **Open**, then **Open** again.
+
+### Optional extras
+
+| Extra | What it does | Install once |
+|---|---|---|
+| Speech-to-text | Writes captions for videos without them (Twitch, your own files) | `python3 -m pip install -U faster-whisper` (Mac, if that fails: `python3 -m pip install -U mlx-whisper`) |
+| Text detection | Skips moments with text already on screen | Mac: `brew install tesseract` · Windows: `winget install UB-Mannheim.TesseractOCR` |
+
+The first time you transcribe, the speech model downloads (about 500 MB). After that it works offline.
 
 ## Set up (once)
 

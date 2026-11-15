@@ -18,7 +18,47 @@ Cuts clips out of a YouTube video and saves them as MP4, as a vertical video for
 
 If clips stop downloading, YouTube has changed something. Run the step 3 command again to update yt-dlp.
 
-## Make a clip
+## Let it find the best moments (like Opus Clip)
+
+```bash
+python clipper/clip.py "LINK" --auto
+```
+
+It finds the 5 best moments, shows them with a score and a reason, and cuts them. Useful extras:
+
+| What you want | Add |
+|---|---|
+| Just see the picks, don't cut | `--list` |
+| A different number of clips | `--count 3` |
+| Shorter or longer clips (seconds) | `--min 20 --max 45` |
+| Ready for Shorts / Reels / TikTok | `--vertical` |
+
+In the step-by-step mode, type `auto` when it asks for a start time. You can then choose which of the found clips to keep.
+
+### How it picks
+
+1. **What viewers rewatch.** YouTube's "Most replayed" graph shows where people jump back to. Clips are built around its peaks.
+2. **What's said (optional, smarter).** With an Anthropic API key, Claude reads the transcript and scores each moment on:
+   - **Hook:** do the first few seconds grab attention?
+   - **Makes sense alone:** does it work without the rest of the video?
+   - **Payoff:** does it end on a punchline, reveal or useful tip?
+
+   It also gives each clip a title. This costs a few cents per video.
+3. **How loud it is.** If a video has no "Most replayed" graph, or it is a file on your computer, it looks for loud, energetic parts such as laughter, applause and raised voices.
+
+Cut points snap to the edges of caption lines, so clips don't start or end mid-word.
+
+### Turn on AI scoring (optional)
+
+1. Get an API key at [console.anthropic.com](https://console.anthropic.com).
+2. Install the library: `python -m pip install -U anthropic`
+3. Set the key before running the script:
+   - **Windows (PowerShell):** `$env:ANTHROPIC_API_KEY = "your-key"`
+   - **Mac / Linux:** `export ANTHROPIC_API_KEY="your-key"`
+
+Without a key, it uses the free method (steps 1 and 3). To skip the AI even with a key set, add `--no-ai`.
+
+## Make a clip by choosing the times yourself
 
 The easiest way: run the script with nothing after it, and it asks you questions.
 

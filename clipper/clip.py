@@ -17,8 +17,12 @@ Usage:
   python clip.py URL 1:23 1:45 --gif                animated GIF
   python clip.py URL 1:23 1:45 --mp3                audio only
   python clip.py my-video.mp4 0:05 0:15             clip a file you already have
+  python clip.py URL --auto                         find the best moments for you
+  python clip.py URL --auto --count 3 --vertical    top 3, ready for Shorts
+  python clip.py URL --auto --list                  only show the picks, cut nothing
 
 Needs: Python 3.8+, ffmpeg, and yt-dlp (pip install yt-dlp).
+For AI scoring in --auto mode: pip install anthropic, and set ANTHROPIC_API_KEY.
 """
 import argparse
 import os
@@ -253,6 +257,41 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps):
     return made
 
 
+def auto_select(source, count, min_len, max_len, use_ai):
+    """Run the highlight finder. Returns (title, clips list from finder)."""
+    import finder
+
+    ffmpeg = find_ffmpeg()
+    local = is_local_file(source)
+    if min_len >= max_len:
+        die("--min must be shorter than --max.")
+    with tempfile.TemporaryDirectory(prefix="clipfinder_") as work:
+        try:
+            title, picks = finder.find_clips(
+                source, is_local=local, ytdlp=None if local else ytdlp_cmd(),
+                ffmpeg=ffmpeg, workdir=work, count=count,
+                min_len=min_len, max_len=max_len, use_ai=use_ai)
+        except RuntimeError as err:
+            die(str(err))
+    if not picks:
+        die("no clips found.")
+    print(f"\nBest moments in \"{title}\":")
+    finder.print_clips(picks)
+    return title, picks
+
+
+def choose_picks(picks):
+    """Let the user keep some of the found clips: '1,3' or 'all'."""
+    answer = ask("Which clips to make? (e.g. 1,3 or all)", "all").lower()
+    if answer in ("all", "a", "*"):
+        return picks
+    keep = []
+    for part in re.split(r"[ ,]+", answer):
+        if part.isdigit() and 1 <= int(part) <= len(picks):
+            keep.append(picks[int(part) - 1])
+    return keep or picks
+
+
 # ---------------------------------------------------------------- input
 
 def ask(prompt, default=None):
@@ -270,13 +309,19 @@ def interactive():
     if not source:
         die("no link given.")
     url_start = start_from_url(source)
-    print("Times can look like 83, 1:23, or 1:02:03.")
+    print("Type  auto  to let the tool find the best moments for you.")
+    print("Or type times like 83, 1:23, or 1:02:03.")
     print("For several clips, type them like  0:10-0:25, 3:00-3:12")
+    title = None
     while True:
         try:
-            first = ask("Start time (or a list of clips)",
-                        label_time(url_start) if url_start is not None else None)
-            if "," in first or re.search(r"\d[-+]\d", first):
+            first = ask("Start time (or a list of clips, or auto)",
+                        label_time(url_start) if url_start is not None else "auto")
+            if first.lower() == "auto":
+                count = int(ask("How many clips to find", "5") or 5)
+                title, picks = auto_select(source, count, 15, 60, True)
+                clips = [(c["start"], c["end"]) for c in choose_picks(picks)]
+            elif "," in first or re.search(r"\d[-+]\d", first):
                 clips = parse_clip_list(first)
             else:
                 end = ask("End time, or +seconds for a length", "+30")
@@ -287,7 +332,7 @@ def interactive():
     print("Save as: 1) MP4   2) Vertical MP4 for Shorts/Reels/TikTok   3) GIF   4) MP3")
     choice = ask("Pick 1-4", "1")
     kind = {"1": "mp4", "2": "vertical", "3": "gif", "4": "mp3"}.get(choice, "mp4")
-    return source, clips, kind
+    return source, clips, kind, title
 
 
 def main():
@@ -308,10 +353,28 @@ def main():
                    help="max video height to download (default: 1080)")
     p.add_argument("--gif-width", type=int, default=480, help="GIF width (default: 480)")
     p.add_argument("--gif-fps", type=int, default=12, help="GIF frames/sec (default: 12)")
+    auto = p.add_argument_group("automatic clip finding")
+    auto.add_argument("--auto", action="store_true",
+                      help="find the best moments automatically")
+    auto.add_argument("--count", type=int, default=5, help="how many clips to find (default: 5)")
+    auto.add_argument("--min", type=float, default=15, help="shortest clip in seconds (default: 15)")
+    auto.add_argument("--max", type=float, default=60, help="longest clip in seconds (default: 60)")
+    auto.add_argument("--no-ai", action="store_true",
+                      help="don't use Claude, even if an API key is set")
+    auto.add_argument("--list", action="store_true",
+                      help="only list the clips found, don't cut them")
     a = p.parse_args()
 
+    title = None
     if not a.source:
-        source, clips, kind = interactive()
+        source, clips, kind, title = interactive()
+    elif a.auto:
+        source = a.source
+        kind = "vertical" if a.vertical else "gif" if a.gif else "mp3" if a.mp3 else "mp4"
+        title, picks = auto_select(source, max(1, a.count), a.min, a.max, not a.no_ai)
+        if a.list:
+            return
+        clips = [(c["start"], c["end"]) for c in picks]
     else:
         source = a.source
         kind = "vertical" if a.vertical else "gif" if a.gif else "mp3" if a.mp3 else "mp4"
@@ -329,7 +392,7 @@ def main():
         except ValueError as err:
             p.error(str(err))
 
-    made = make_clips(source, clips, kind, a.out, a.name, a.quality,
+    made = make_clips(source, clips, kind, a.out, a.name or title, a.quality,
                       a.gif_width, a.gif_fps)
     print(f"\nDone. {len(made)} clip(s) saved in: {os.path.abspath(a.out)}")
 

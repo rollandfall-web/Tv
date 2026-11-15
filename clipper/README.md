@@ -139,6 +139,16 @@ Times can be written as `83`, `1:23`, `1:02:03` or `1m23s`. If your link has a s
 
 **Vertical clips** keep the middle of the picture and cut off the sides. Keep the action centred.
 
+## Moving Clip Maker to another drive
+
+1. Quit Clip Maker (close its small window).
+2. In Finder, drag the Clip Maker folder onto the other drive, rename it `ClipMaker`, then delete the old copy.
+3. Double-click `Clip Maker.command` inside the moved folder.
+
+When the app runs from another drive, new clips are saved in a `Clips` folder next to it on that drive. To pick a different folder, open **Save clips to** in the app, drag a folder into the box, and click **Save**. Keep the drive plugged in while you use Clip Maker. If it isn't connected, clips go to Movies/Clip Maker instead.
+
+Python, ffmpeg and the other tools stay installed on your Mac; only the Clip Maker folder moves.
+
 ## Use it with StarNet agents
 
 [StarNet](https://starnetos.com) agents can run Clip Maker for you, from the station or from your phone on Telegram.

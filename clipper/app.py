@@ -36,13 +36,65 @@ def _raise(msg):
 
 clip.die = _raise   # in the app, errors are shown on the page instead of exiting
 
-home = os.path.expanduser("~")
-_base = next((os.path.join(home, d) for d in ("Movies", "Videos")
-              if os.path.isdir(os.path.join(home, d))), home)
-OUT_DIR = os.path.join(_base, "Clip Maker")
+ROOT = os.path.dirname(HERE)                       # the Clip Maker folder
+SETTINGS_FILE = os.path.join(ROOT, "clipmaker-settings.json")
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def default_out_dir():
+    """Where clips go unless the user picked a folder.
+
+    On another drive (Mac: /Volumes/..., Windows: not the system drive), clips
+    are kept next to the app in a "Clips" folder, so everything stays on that
+    drive. Otherwise they go to Movies (Mac) or Videos (Windows).
+    """
+    if os.environ.get("CLIPMAKER_OUT"):
+        return os.path.expanduser(os.environ["CLIPMAKER_OUT"])
+    system_drive = os.path.splitdrive(os.path.expanduser("~"))[0].lower()
+    if ROOT.startswith("/Volumes/") or (os.name == "nt" and
+                                        os.path.splitdrive(ROOT)[0].lower() != system_drive):
+        return os.path.join(ROOT, "Clips")
+    home = os.path.expanduser("~")
+    base = next((os.path.join(home, d) for d in ("Movies", "Videos")
+                 if os.path.isdir(os.path.join(home, d))), home)
+    return os.path.join(base, "Clip Maker")
+
+
+OUT_DIR = load_settings().get("out_dir") or default_out_dir()
+if not os.path.isdir(os.path.dirname(OUT_DIR.rstrip("/\\")) or "."):
+    OUT_DIR = default_out_dir()          # the saved folder's drive isn't connected
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "clipmaker_cache")
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+def set_out_dir(path):
+    """Change where clips are saved (remembered next to the app)."""
+    global OUT_DIR
+    path = os.path.abspath(os.path.expanduser(path.strip().strip("'\"")))
+    if not path or not os.path.isdir(os.path.dirname(path)):
+        raise RuntimeError("That folder's location doesn't exist. Is the drive connected?")
+    os.makedirs(path, exist_ok=True)
+    test = os.path.join(path, ".clipmaker-write-test")
+    try:
+        with open(test, "w") as fh:
+            fh.write("ok")
+        os.remove(test)
+    except OSError:
+        raise RuntimeError("Clip Maker can't save files in that folder.")
+    settings = load_settings()
+    settings["out_dir"] = path
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as fh:
+        json.dump(settings, fh, indent=2)
+    OUT_DIR = path
+    return path
 
 JOBS = {}
 WORDS = {}           # (url, browser) -> caption words for the whole video
@@ -398,6 +450,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/open":
             open_folder()
             return self.send_json({"ok": True})
+        if path == "/api/settings":
+            try:
+                return self.send_json({"out_dir": set_out_dir(str(p.get("out_dir") or ""))})
+            except RuntimeError as err:
+                return self.send_json({"error": str(err)}, 400)
         self.send_error(404)
 
 
@@ -543,6 +600,14 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
       <button id="manualBtn">Edit this part</button>
     </div>
     <div id="findStatus" class="status"></div>
+    <details style="margin-top:14px"><summary class="hint" style="cursor:pointer">Save clips to: <b id="outDirLbl"></b></summary>
+      <div class="row" style="margin-top:8px">
+        <input id="outDir" type="text" class="url" placeholder="/Volumes/MyDrive/Clips">
+        <button class="small" id="outDirBtn">Save</button>
+      </div>
+      <p class="hint">Tip: drag a folder from Finder into this box to fill in its location. The choice is remembered.</p>
+      <div id="outStatus" class="status"></div>
+    </details>
   </section>
 
   <section id="picksCard" class="card hidden">
@@ -964,6 +1029,18 @@ $("#makeBtn").onclick = async () => {
   } catch(e) {} finally { $("#makeBtn").disabled = false; }
 };
 $("#openBtn").onclick = () => api("/api/open", {});
+function showOutDir(){ $("#outDirLbl").textContent = S.info.out_dir; $("#outDir").value = S.info.out_dir; }
+$("#outDir").addEventListener("drop", e => {
+  // Finder drops a file:// URL; turn it into a plain path.
+  const t = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain");
+  if (t && t.startsWith("file://")) { e.preventDefault(); $("#outDir").value = decodeURIComponent(t.replace("file://", "").trim()); }
+});
+$("#outDirBtn").onclick = async () => {
+  const r = await fetch("/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({out_dir:$("#outDir").value})});
+  const j = await r.json();
+  if (j.error) return status($("#outStatus"), j.error, "err");
+  S.info.out_dir = j.out_dir; showOutDir(); status($("#outStatus"), "Saved. New clips will go to " + j.out_dir, "");
+};
 
 // ---------------------------------------------------------------- start
 const READY = (async () => {
@@ -977,6 +1054,7 @@ const READY = (async () => {
     $("#skipLbl").title = S.info.tesseract_hint; w.push(S.info.tesseract_hint); }
   $("#warn").innerHTML = w.map(x => `<div class="warn">${escapeHtml(x)}</div>`).join("");
   if (S.info.mac) $("#browser").value = "chrome";
+  showOutDir();
   $("#smartLine").textContent = {
     claude:"Smart picks: Claude reads the transcript.",
     local:"Smart picks: the free local AI (Ollama) reads the transcript.",

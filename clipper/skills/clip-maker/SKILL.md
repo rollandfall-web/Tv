@@ -11,13 +11,16 @@ Everything runs locally. It is free; it never needs an API key.
 
 ## Before you start
 
-1. **Find the tool.** It is a folder containing `clipper/clip.py`. Look in this
-   order and use the first that exists:
+1. **Find the tool.** It is a folder containing `clipper/clip.py`. Use the
+   first of these that exists:
+   - a folder the commander told you about
    - `~/ClipMaker`
+   - a `ClipMaker` folder on another drive: `ls -d /Volumes/*/ClipMaker`
    - `~/Downloads/Tv-claude-youtube-clip-maker-lyx2h0`
 
-   If neither exists, ask the commander where the Clip Maker folder is. Run
-   every command below from inside that folder (`cd` into it first).
+   If none exists, ask the commander where the Clip Maker folder is, and check
+   that its drive is connected. Run every command below from inside that
+   folder (`cd` into it first).
 2. **Check permission.** Only clip videos the commander owns or has permission
    to use (for example, a streamer's clipping campaign). If the commander asks
    to clip someone else's video and permission is unclear, ask once before
@@ -63,8 +66,8 @@ Other outputs: leave out `--vertical` for 16:9, `--gif` for a GIF, `--mp3` for a
 `--caption-style clean` gives smaller, sentence-case captions instead of the bold
 yellow-highlight style. Leave out `--captions` if the video already has subtitles.
 
-Clips are saved in the `clips` folder inside the Clip Maker folder (change with
-`-o FOLDER`). The output lists each file as `saved PATH` and ends with
+Clips are saved in the `clips` folder inside the Clip Maker folder, so they stay
+on the same drive as the tool (change with `-o FOLDER`). The output lists each file as `saved PATH` and ends with
 `Done. N clip(s) saved in: FOLDER`. Report those paths to the commander.
 
 Clips start and end on full sentences when the video has speech.

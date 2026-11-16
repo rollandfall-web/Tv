@@ -14,9 +14,13 @@ Everything runs locally. It is free; it never needs an API key.
 1. **Find the tool.** It is a folder containing `clipper/clip.py`. Use the
    first of these that exists:
    - a folder the commander told you about
-   - `~/ClipMaker`
-   - a `ClipMaker` folder on another drive: `ls -d /Volumes/*/ClipMaker`
+   - `~/ClipMaker` or `~/Clip Maker`
+   - a Clip Maker folder on another drive. List candidates with:
+     `ls -d /Volumes/*/ClipMaker /Volumes/*/"Clip Maker" /Volumes/*/Tv-claude-youtube-clip-maker-lyx2h0 2>/dev/null`
    - `~/Downloads/Tv-claude-youtube-clip-maker-lyx2h0`
+
+   Folder names may contain spaces: always put the path in double quotes,
+   e.g. `cd "/Volumes/Mac Memory Drive/Clip Maker"`.
 
    If none exists, ask the commander where the Clip Maker folder is, and check
    that its drive is connected. Run every command below from inside that

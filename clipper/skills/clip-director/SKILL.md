@@ -62,12 +62,25 @@ From the returned picks, choose the clips to make:
 - Avoid picks that overlap or say the same thing twice.
 - Keep each clip within the length the commander wants (default 15 to 60 s).
 
+## Campaign rules come first
+
+Before any clipping for a campaign, read its brief and requirements (saved in
+the streamer's `Outreach/<Streamer>/profile.md` Notes). Typical rules and how to
+meet them:
+
+- "Include the stream handle in the clips": add `--credit "twitch.tv/NAME"`.
+- "Give context": use `--min 30 --max 60` and start a little before the moment.
+- "No drama baiting": skip arguments, beef and misleading moments; no clickbait titles.
+- A specific source (e.g. "NoPixel V streams only"): only clip those streams.
+- "Link in bio": remind the commander to add the link before posting.
+- "Pre-approval": clips are submitted as drafts by the commander and only posted once approved.
+
 ## 4. Make the clips (delegate)
 
 Dispatch to the same crew member with the exact times, in seconds from the picks:
 
 > Make these clips as vertical Shorts with captions:
-> `python3 clipper/clip.py "LINK" --clips "41.0-63.5, 120.2-151.0" --vertical --captions`
+> `python3 clipper/clip.py "LINK" --clips "41.0-63.5, 120.2-151.0" --vertical --captions --credit "twitch.tv/NAME"`
 > Send back each saved file path.
 
 Leave out `--captions` if the commander said the video already has subtitles.

@@ -66,16 +66,19 @@ Useful options:
 | `--focus "car chases, funny reactions"` | What the commander wants. Pass their words. |
 | `--count 3` | How many moments. |
 | `--min 15 --max 45` | Clip length range in seconds (default 15 to 60). |
+| `--credit "twitch.tv/NAME"` | Shows the streamer's handle on screen for the whole clip. Use it whenever a campaign asks to "include the stream handle in the clip", and for any streamer you clip. |
 | `--skip-text` | Skip moments that already have subtitles or titles on screen (needs Tesseract). |
 | `--browser chrome` | Only if an error says the video is age-restricted or asks to "confirm you're not a bot". Uses Chrome's YouTube sign-in. |
 
 ## Make the clips
 
-Shorts with captions, best moments chosen automatically:
+Shorts with captions and the streamer's handle, best moments chosen automatically:
 
 ```bash
-python3 clipper/clip.py "LINK" --auto --count 3 --vertical --captions --focus "WHAT THEY WANT"
+python3 clipper/clip.py "LINK" --auto --count 3 --vertical --captions --credit "twitch.tv/NAME" --focus "WHAT THEY WANT"
 ```
+
+For campaigns that want context (most do), use longer clips: add `--min 30 --max 60`.
 
 Exact times the commander gives (start and end, or start and `+seconds`):
 

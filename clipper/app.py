@@ -297,8 +297,11 @@ def job_make(job, p):
                          "-c:a", "aac", "-b:a", "192k", raw],
                         job.span(0.1, 0.35), cut_out - cut_in)
         crop = dict(p.get("crop") or {}, aspect=aspect)
+        credit = (p.get("credit") or "").strip()[:80] or None
+        if credit and not clip.has_captions_support(ffmpeg):
+            job.log("Your ffmpeg can't draw text, so the credit wasn't added (Mac fix: brew install ffmpeg-full).")
         clip.convert(raw, dest, "mp4", ffmpeg, 480, 12, words, p.get("style") or "bold",
-                     lines, crop, on_progress=job.span(0.35, 1.0))
+                     lines, crop, on_progress=job.span(0.35, 1.0), credit=credit)
     return {"file": "/out/" + os.path.basename(dest), "name": os.path.basename(dest)}
 
 
@@ -532,6 +535,7 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 .drag:active{cursor:grabbing}
 .cap{position:absolute;left:6%;right:6%;text-align:center;pointer-events:none;line-height:1.15}
 .cap .box{box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.credit{position:absolute;left:4%;right:4%;text-align:center;pointer-events:none;color:#fff;font-weight:800;font-family:Arial,sans-serif;-webkit-text-stroke:2px #000;paint-order:stroke fill}
 .cap span.wd{display:inline-block;transition:transform .08s;margin:0 .06em}
 .playbar{display:flex;gap:8px;align-items:center;margin-top:10px}
 .playbar .tc{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;width:86px;text-align:right}
@@ -629,6 +633,7 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
         <div class="stage"><div id="frame" class="frame">
           <video id="vid" playsinline preload="auto"></video>
           <div id="cap" class="cap"></div>
+          <div id="creditPrev" class="credit"></div>
           <div id="drag" class="drag" title="Drag to move the picture. Click to play or pause."></div>
         </div></div>
         <div class="ctl"><label>Zoom</label><input id="zoom" type="range" min="1" max="3" step="0.05" value="1"><output></output></div>
@@ -648,6 +653,8 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
       </div>
 
       <div>
+        <div class="ctl" style="grid-template-columns:140px 1fr"><label for="credit">Credit on screen</label><input id="credit" type="text" placeholder="e.g. twitch.tv/Lysium" maxlength="80"></div>
+        <p class="hint" style="margin:-2px 0 12px">Shown near the top for the whole clip. Many campaigns require the streamer's handle.</p>
         <label class="chk"><input id="capOn" type="checkbox" checked> Captions</label>
         <span class="hint" style="margin-left:6px">Off if the video already has subtitles.</span>
 
@@ -990,7 +997,15 @@ document.querySelectorAll("[data-preset]").forEach(b => b.onclick = () => {
 $("#capOn").onchange = () => $("#capPanel").classList.toggle("hidden", !$("#capOn").checked);
 
 // ---------------------------------------------------------------- live caption preview
+function renderCredit(){
+  const el = $("#creditPrev"), t = $("#credit").value.trim(), H = $("#frame").clientHeight, vertical = S.aspect !== "16:9";
+  el.textContent = t;
+  el.style.top = (vertical ? 12 : 5) + "%";
+  el.style.fontSize = (H * (vertical ? 0.03 : 0.045)) + "px";
+}
+$("#credit").addEventListener("input", () => { store.set("credit", $("#credit").value); renderCredit(); });
 function renderCap(){
+  renderCredit();
   const cap = $("#cap"), st = S.style;
   if (!$("#capOn").checked || !S.lines.length) { cap.innerHTML = ""; return; }
   const t = vid().currentTime || 0;
@@ -1024,7 +1039,7 @@ $("#makeBtn").onclick = async () => {
     const r = await runJob("/api/make", {url:$("#url").value.trim(), browser:$("#browser").value,
       sec_start:S.prep.sec_start, sec_end:S.prep.sec_end, cut_in:S.cut[0], cut_out:S.cut[1],
       title:S.title || S.clip.title || "", aspect:S.aspect, crop:S.crop,
-      captions:$("#capOn").checked, words, lines, style:S.style}, $("#makeStatus"));
+      captions:$("#capOn").checked, words, lines, style:S.style, credit:$("#credit").value.trim()}, $("#makeStatus"));
     $("#result").innerHTML = `<video src="${r.file}" controls playsinline></video><div class="hint">Saved as <b>${escapeHtml(r.name)}</b> in ${escapeHtml(S.info.out_dir)}</div>`;
   } catch(e) {} finally { $("#makeBtn").disabled = false; }
 };
@@ -1055,6 +1070,7 @@ const READY = (async () => {
   $("#warn").innerHTML = w.map(x => `<div class="warn">${escapeHtml(x)}</div>`).join("");
   if (S.info.mac) $("#browser").value = "chrome";
   showOutDir();
+  $("#credit").value = store.get("credit", "");
   $("#smartLine").textContent = {
     claude:"Smart picks: Claude reads the transcript.",
     local:"Smart picks: the free local AI (Ollama) reads the transcript.",

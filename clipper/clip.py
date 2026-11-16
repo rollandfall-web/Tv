@@ -426,7 +426,7 @@ def crop_filter(src_w, src_h, aspect="9:16", x=0.5, y=0.5, zoom=1.0):
 
 
 def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold",
-            lines=None, crop=None, on_progress=None):
+            lines=None, crop=None, on_progress=None, credit=None):
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
@@ -445,10 +445,10 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
             size = (1080, 1920)
         else:
             size = video_size(raw, ffmpeg)
-        if words:
+        if (words or credit) and has_captions_support(ffmpeg):
             import captions
             ass = os.path.join(os.path.dirname(os.path.abspath(raw)), "captions.ass")
-            captions.write_ass(ass, words, size[0], size[1], style, lines)
+            captions.write_ass(ass, words, size[0], size[1], style, lines, credit)
             # Bare file name + cwd avoids ffmpeg's path escaping rules (Windows "C:").
             filters.append("subtitles=captions.ass")
         if not filters:
@@ -469,7 +469,7 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
 
 
 def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
-               add_captions=False, caption_style="bold", transcribe="auto"):
+               add_captions=False, caption_style="bold", transcribe="auto", credit=None):
     ffmpeg = find_ffmpeg()
     os.makedirs(outdir, exist_ok=True)
     base = safe_name(name or video_title(source))
@@ -515,7 +515,8 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
                 clip_words = captions.words_in(words, s, e)
             if add_captions and (use_speech or words) and not clip_words:
                 print("    (no speech in this clip, so no captions)")
-            convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, clip_words, caption_style)
+            convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, clip_words, caption_style,
+                    credit=credit)
             print(f"    saved {dest}")
             made.append(dest)
     return made
@@ -647,6 +648,8 @@ def main():
     cap = p.add_argument_group("captions")
     cap.add_argument("--captions", action="store_true",
                      help="burn in animated word-by-word captions")
+    cap.add_argument("--credit", metavar="TEXT",
+                     help='text shown on screen the whole clip, e.g. "twitch.tv/Lysium"')
     cap.add_argument("--transcribe", action="store_true",
                      help="write captions with speech-to-text on this computer, "
                           "even if YouTube has captions (needs faster-whisper)")
@@ -689,7 +692,7 @@ def main():
 
     made = make_clips(source, clips, kind, a.out, a.name or title, a.quality,
                       a.gif_width, a.gif_fps, a.captions, a.caption_style,
-                      "always" if a.transcribe else "auto")
+                      "always" if a.transcribe else "auto", a.credit)
     print(f"\nDone. {len(made)} clip(s) saved in: {os.path.abspath(a.out)}")
 
 

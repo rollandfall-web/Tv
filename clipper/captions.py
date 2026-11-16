@@ -170,7 +170,24 @@ def norm_words(words):
     return [w for w in out if w["w"].strip()]
 
 
-def build_ass(words, width, height, style="bold", lines=None):
+def credit_events(credit, width, height, font="Arial"):
+    """A styles line + event that shows credit text (e.g. twitch.tv/Name) the whole clip.
+
+    Sits near the top, below where TikTok/Reels put their own buttons.
+    """
+    text = clean_word(str(credit or "")).strip()
+    if not text:
+        return "", ""
+    size = max(8, round(height * (0.03 if height > width else 0.045)))
+    outline = max(2, size // 9)
+    top = round(height * (0.12 if height > width else 0.05))
+    style = (f"Style: Credit,{font},{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,"
+             f"-1,0,0,0,100,100,0,0,1,{outline},1,8,20,20,{top},1")
+    event = f"Dialogue: 2,0:00:00.00,9:59:59.00,Credit,,0,0,0,,{text}"
+    return style, event
+
+
+def build_ass(words, width, height, style="bold", lines=None, credit=None):
     """ASS subtitle text for words already shifted to clip time.
 
     style: a preset name ("bold"/"clean") or a full style dict (see PRESETS).
@@ -197,6 +214,7 @@ def build_ass(words, width, height, style="bold", lines=None):
     box = ass_color(st["box_color"], float(st["box_opacity"]))
     box_pad = max(4, size // 5)
 
+    credit_style, credit_event = credit_events(credit, width, height, font)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -208,11 +226,12 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,{font},{size},{fill},{fill},{edge},{shade},{bold},0,0,0,100,100,0,0,1,{outline},{shadow},2,{margin_h},{margin_h},{margin_v},1
 Style: Box,{font},{size},&HFF000000,&HFF000000,{box},&HFF000000,{bold},0,0,0,100,100,0,0,3,{box_pad},0,2,{margin_h},{margin_h},{margin_v},1
+{credit_style}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    if lines is None:
+    if lines is None and words:
         groups = chunk_words([(w["s"], w["e"], w["w"]) for w in words],
                              max(1, int(st["words_per_line"])))
         lines, i = [], 0
@@ -226,7 +245,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     pop = r"\fscx112\fscy112" if st["pop"] else ""
     events = []
-    for idx in lines:
+    for idx in lines or []:
         chunk = [words[i] for i in idx if 0 <= i < len(words)]
         if not chunk:
             continue
@@ -255,12 +274,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 else:
                     parts.append(t)
             events.append(f"Dialogue: 1,{ass_time(s)},{ass_time(e)},Cap,,0,0,0,,{' '.join(parts)}")
+    if credit_event:
+        events.append(credit_event)
     return header + "\n".join(events) + "\n"
 
 
-def write_ass(path, words, width, height, style="bold", lines=None):
+def write_ass(path, words, width, height, style="bold", lines=None, credit=None):
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(build_ass(words, width, height, style, lines))
+        fh.write(build_ass(words or [], width, height, style, lines, credit))
     return path
 
 

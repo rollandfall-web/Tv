@@ -12,13 +12,33 @@ part to the right crew member, check their work, and report to the commander.
 
 Collect, asking once only if something essential is missing:
 
-- **The video link** (YouTube or Twitch) or file path. Required.
+- **The video link** (YouTube or Twitch) or file path. If there's no link and
+  the commander wants you to find videos, see step 1b.
 - **How many clips.** Default 3.
 - **Focus:** what the commander wants (e.g. "car chases", "funny reactions").
   Optional; pass their exact words.
 - **Format:** vertical Shorts with captions unless they say otherwise.
 - **Permission:** the commander must own the video or have permission to clip
   it (for example a streamer's clipping campaign). If unclear, ask once.
+
+## 1b. No link? Find videos first (delegate)
+
+If the commander asks you to find videos (a topic, a game, a channel or a
+streamer), dispatch the search to the crew member with the clip-maker skill:
+
+> Use the clip-maker skill's "Find videos" commands. Search for: TOPIC (or list
+> the latest videos from CHANNEL). Return title, channel, length, views and link
+> for up to 10 results.
+
+Then choose up to 5 good candidates: long enough to have moments (8+ minutes),
+recent if the commander cares about trends, and with lots of views if shown.
+Skip clip compilations and re-uploads; they are already clips of someone else's
+video.
+
+**Ask before clipping.** Show the commander the candidates (title, channel,
+length, link) and ask which ones to clip. Only skip asking for channels the
+commander has told you they have permission to clip (keep that list in your
+memory when they give it). Never clip a video just because a search found it.
 
 ## 2. Find the moments (delegate)
 

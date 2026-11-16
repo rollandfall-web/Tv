@@ -31,6 +31,24 @@ Everything runs locally. It is free; it never needs an API key.
    making clips. Never post clips anywhere unless the commander asks.
 3. **Use `python3`** on macOS. On Windows use `python`.
 
+## Find videos
+
+Search YouTube (the number after `ytsearch` is how many results):
+
+```bash
+yt-dlp --flat-playlist --print "%(title)s | %(channel)s | %(duration_string)s | %(view_count)s views | %(url)s" "ytsearch10:GTA 6 funny moments"
+```
+
+Newest uploads from a channel, or a Twitch streamer's latest streams:
+
+```bash
+yt-dlp --flat-playlist -I 1:10 --print "%(title)s | %(duration_string)s | %(view_count)s views | %(url)s" "https://www.youtube.com/@CHANNEL/videos"
+yt-dlp --flat-playlist -I 1:10 --print "%(title)s | %(duration_string)s | %(url)s" "https://www.twitch.tv/STREAMER/videos?filter=archives"
+```
+
+Some fields can show `NA` (for example views in search results); that's normal.
+Return the list as it is. Finding a video is not permission to clip it.
+
 ## Find the best moments (no cutting)
 
 ```bash

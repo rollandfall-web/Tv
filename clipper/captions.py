@@ -66,6 +66,7 @@ def words_from_json3(text):
             step = (end - start) / max(1, len(parts))
             for i, w in enumerate(parts):
                 words.append([start + i * step, start + (i + 1) * step, w])
+    words = [w for w in words if not is_marker(w[2])]
     words.sort(key=lambda w: w[0])
     # Each word ends when the next one starts (no overlaps), and no word
     # stays on screen for more than 1.5 s on its own.
@@ -73,6 +74,14 @@ def words_from_json3(text):
         nxt = words[i + 1][0] if i + 1 < len(words) else w[1]
         w[1] = max(w[0] + 0.05, min(w[1], nxt, w[0] + 1.5))
     return [tuple(w) for w in words]
+
+
+_MARKER = re.compile(r"^(>>+|&gt;(&gt;)+|-+|\[[^\]]*\]?|[^\[]*\]|♪+|\(\s*(music|applause|laughter|laughs|inaudible)\s*\))$", re.I)
+
+
+def is_marker(word):
+    """YouTube caption markers that aren't speech: >> (new speaker), [Music], ♪ ..."""
+    return bool(_MARKER.match(word.strip()))
 
 
 def words_in(words, start, end):

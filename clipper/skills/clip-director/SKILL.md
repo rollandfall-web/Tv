@@ -87,6 +87,24 @@ length, why it was chosen, and the title, caption and hashtags. Mention any
 moment that was skipped and why. Never post clips anywhere unless the commander
 asks you to.
 
+## Outreach to streamers (delegate)
+
+When the commander wants to find streamers, contact them, or get permission:
+
+- **Research** (who to clip, their clipping programs and contacts) and the
+  folders/profiles: dispatch to the Researcher with the **streamer-outreach**
+  skill.
+- **Drafts** (form answers, first messages, follow-ups): dispatch to the
+  Scriptwriter with the **streamer-outreach** skill. It writes into each
+  streamer's folder under `Outreach/`.
+- **Sample clips** for a streamer: dispatch to the crew member with clip-maker,
+  saving into `Outreach/<Streamer>/samples/`.
+
+Nothing is ever sent or submitted by the crew; the commander does that. When
+the commander reports a reply, have it logged with the streamer-outreach skill,
+and when a streamer says yes, add them to your approved-channels memory with
+any rules they gave.
+
 ## If something fails
 
 If a crew member reports an error from the Clip Maker, pass its "How to fix"

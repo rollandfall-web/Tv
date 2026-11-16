@@ -25,7 +25,7 @@ Collect, asking once only if something essential is missing:
 Dispatch to the crew member who has the **clip-maker** skill and a Workbench
 (usually the Researcher). Give them everything they need in one message, e.g.:
 
-> Use the clip-maker skill. Clip Maker folder: "/Volumes/Mac Memory Drive/Clip Maker".
+> Use the clip-maker skill. Clip Maker folder: "/Volumes/Mac Memory Drive/ClipMaker".
 > Find the best moments, don't cut yet:
 > `python3 clipper/clip.py "LINK" --auto --list --json --count 6 --focus "FOCUS"`
 > Send back the full `@@PICKS@@` JSON line.

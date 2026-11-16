@@ -36,6 +36,33 @@ from urllib.parse import parse_qs, urlparse
 
 FORMATS = ("mp4", "vertical", "gif", "mp3")
 
+
+def _widen_path():
+    """Find tools even when started with a bare PATH.
+
+    Apps such as StarNet, launchers and schedulers often run commands with a
+    short PATH that leaves out Homebrew and Python's own script folder, so
+    ffmpeg, yt-dlp and deno look "not installed" when they are. Add the usual
+    install folders that exist (and aren't listed already) to the end of PATH.
+    """
+    import sysconfig
+    extra = ["/opt/homebrew/bin", "/opt/homebrew/opt/ffmpeg-full/bin", "/usr/local/bin",
+             os.path.expanduser("~/.deno/bin"), os.path.expanduser("~/.local/bin"),
+             os.path.dirname(sys.executable)]
+    for scheme in ("posix_user", "nt_user", "osx_framework_user", None):
+        try:
+            extra.append(sysconfig.get_path("scripts", scheme) if scheme
+                         else sysconfig.get_path("scripts"))
+        except (KeyError, ValueError):
+            pass
+    current = os.environ.get("PATH", "").split(os.pathsep)
+    add = [d for d in extra if d and os.path.isdir(d) and d not in current]
+    if add:
+        os.environ["PATH"] = os.pathsep.join(current + add)
+
+
+_widen_path()
+
 # Python from python.org on a Mac ships without website certificates, which
 # breaks every YouTube download. If the certifi package is installed, point
 # Python (and yt-dlp, which inherits this) at its certificates.

@@ -22,6 +22,8 @@ After the one-time setup below, **double-click `Clip Maker.command`** (Mac) or *
    - **Words:** they come from YouTube's captions, or from **Transcribe speech** (speech-to-text on your computer). Fix any word, delete lines, or add your own. Wrap a word in `*stars*` to highlight it.
    - **Style:** font, size, position, colors, outline, bold, uppercase, pop, shadow, words per line.
    - **Opacity:** text opacity, plus a background box with its own color and opacity.
+   - **Headline text:** big text across the top for music edits with no talking (Enter for a new line). From Terminal: `--headline "Line one | line two"`.
+   - **Original audio:** 0% removes the clip's own sound, ready for adding a song in TikTok or Reels; around 20% keeps game sounds quietly under music. From Terminal: `--mute` or `--volume 20`.
    - **Credit on screen:** type the streamer's handle (for example `twitch.tv/Lysium`) to show it near the top for the whole clip. Many campaigns require it. From Terminal: `--credit "twitch.tv/Lysium"`.
 5. Click **Make clip**. Clips are saved in **Movies/Clip Maker** (Videos/Clip Maker on Windows).
 

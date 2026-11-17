@@ -187,7 +187,29 @@ def credit_events(credit, width, height, font="Arial"):
     return style, event
 
 
-def build_ass(words, width, height, style="bold", lines=None, credit=None):
+def headline_events(headline, width, height, font="Arial"):
+    """Big on-screen text for the whole clip (tell a story without a voice).
+
+    Put a line break with a new line or " | ". Sits in the upper third, below
+    the credit line, clear of TikTok/Reels buttons.
+    """
+    raw = str(headline or "").replace(" | ", "\n").replace("|", "\n")
+    parts = [clean_word(p).strip() for p in raw.splitlines()]
+    text = "\\N".join(p for p in parts if p)
+    if not text:
+        return "", ""
+    vertical = height > width
+    size = max(10, round(height * (0.045 if vertical else 0.07)))
+    outline = max(3, size // 8)
+    top = round(height * (0.19 if vertical else 0.12))
+    margin = round(width * 0.07)
+    style = (f"Style: Headline,{font},{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,"
+             f"-1,0,0,0,100,100,0,0,1,{outline},2,8,{margin},{margin},{top},1")
+    event = f"Dialogue: 3,0:00:00.00,9:59:59.00,Headline,,0,0,0,,{text}"
+    return style, event
+
+
+def build_ass(words, width, height, style="bold", lines=None, credit=None, headline=None):
     """ASS subtitle text for words already shifted to clip time.
 
     style: a preset name ("bold"/"clean") or a full style dict (see PRESETS).
@@ -215,6 +237,7 @@ def build_ass(words, width, height, style="bold", lines=None, credit=None):
     box_pad = max(4, size // 5)
 
     credit_style, credit_event = credit_events(credit, width, height, font)
+    head_style, head_event = headline_events(headline, width, height, font)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -227,6 +250,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Cap,{font},{size},{fill},{fill},{edge},{shade},{bold},0,0,0,100,100,0,0,1,{outline},{shadow},2,{margin_h},{margin_h},{margin_v},1
 Style: Box,{font},{size},&HFF000000,&HFF000000,{box},&HFF000000,{bold},0,0,0,100,100,0,0,3,{box_pad},0,2,{margin_h},{margin_h},{margin_v},1
 {credit_style}
+{head_style}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -276,12 +300,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             events.append(f"Dialogue: 1,{ass_time(s)},{ass_time(e)},Cap,,0,0,0,,{' '.join(parts)}")
     if credit_event:
         events.append(credit_event)
+    if head_event:
+        events.append(head_event)
     return header + "\n".join(events) + "\n"
 
 
-def write_ass(path, words, width, height, style="bold", lines=None, credit=None):
+def write_ass(path, words, width, height, style="bold", lines=None, credit=None, headline=None):
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(build_ass(words or [], width, height, style, lines, credit))
+        fh.write(build_ass(words or [], width, height, style, lines, credit, headline))
     return path
 
 

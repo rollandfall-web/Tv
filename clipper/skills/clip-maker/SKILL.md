@@ -97,6 +97,8 @@ Useful options:
 | `--count 3` | How many moments. |
 | `--min 15 --max 45` | Clip length range in seconds (default 15 to 60). |
 | `--credit "twitch.tv/NAME"` | Shows the streamer's handle on screen for the whole clip. Use it whenever a campaign asks to "include the stream handle in the clip", and for any streamer you clip. |
+| `--headline "TEXT"` | Big text across the top for the whole clip (music edits with no talking). `" | "` starts a new line. |
+| `--mute` or `--volume 20` | Remove the clip's own audio (to add a song in TikTok/Reels), or keep it quietly under music. |
 | `--skip-text` | Skip moments that already have subtitles or titles on screen (needs Tesseract). |
 | `--browser chrome` | When a video needs sign-in, is age-restricted or asks to "confirm you're not a bot". Uses Chrome's sign-in. |
 
@@ -116,6 +118,12 @@ Exact times the commander gives (start and end, or start and `+seconds`):
 python3 clipper/clip.py "LINK" 1:23 1:45 --vertical --captions
 python3 clipper/clip.py "LINK" --clips "0:10-0:25, 3:00+12" --vertical --captions
 ```
+
+Music campaigns (the song must be the main audio, no talking): cut a short
+clip with no captions, a headline, and no original audio, then the commander
+adds the official sound when posting:
+
+    python3 clipper/clip.py "TRAILER_LINK" 1:02 +15 --vertical --headline "When GTA 6 finally | drops tomorrow" --mute
 
 Other outputs: leave out `--vertical` for 16:9, `--gif` for a GIF, `--mp3` for audio.
 `--caption-style clean` gives smaller, sentence-case captions instead of the bold

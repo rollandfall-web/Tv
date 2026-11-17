@@ -426,7 +426,7 @@ def crop_filter(src_w, src_h, aspect="9:16", x=0.5, y=0.5, zoom=1.0):
 
 
 def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold",
-            lines=None, crop=None, on_progress=None, credit=None):
+            lines=None, crop=None, on_progress=None, credit=None, headline=None, volume=100):
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
@@ -445,19 +445,28 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
             size = (1080, 1920)
         else:
             size = video_size(raw, ffmpeg)
-        if (words or credit) and has_captions_support(ffmpeg):
+        if (words or credit or headline) and has_captions_support(ffmpeg):
             import captions
             ass = os.path.join(os.path.dirname(os.path.abspath(raw)), "captions.ass")
-            captions.write_ass(ass, words, size[0], size[1], style, lines, credit)
+            captions.write_ass(ass, words, size[0], size[1], style, lines, credit, headline)
             # Bare file name + cwd avoids ffmpeg's path escaping rules (Windows "C:").
             filters.append("subtitles=captions.ass")
-        if not filters:
+        volume = max(0, min(100, int(volume if volume is not None else 100)))
+        if not filters and volume == 100:
             shutil.move(raw, dest)
             return
-        run_ffmpeg([ffmpeg, "-y", "-i", os.path.abspath(raw), "-vf", ",".join(filters),
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                    "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
-                    os.path.abspath(dest)], on_progress,
+        # Original audio: 0 removes it (for adding a song in TikTok/Reels),
+        # lower values keep game sound effects quietly under music.
+        if volume == 0:
+            audio = ["-an"]
+        elif volume < 100:
+            audio = ["-af", f"volume={volume / 100:.2f}", "-c:a", "aac", "-b:a", "160k"]
+        else:
+            audio = ["-c:a", "aac", "-b:a", "160k"]
+        video = (["-vf", ",".join(filters), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+                 if filters else ["-c:v", "copy"])
+        run_ffmpeg([ffmpeg, "-y", "-i", os.path.abspath(raw)] + video + audio +
+                   ["-movflags", "+faststart", os.path.abspath(dest)], on_progress,
                    local_duration(raw, ffmpeg) if on_progress else None,
                    cwd=os.path.dirname(os.path.abspath(raw)))
     elif kind == "gif":
@@ -469,7 +478,8 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
 
 
 def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
-               add_captions=False, caption_style="bold", transcribe="auto", credit=None):
+               add_captions=False, caption_style="bold", transcribe="auto", credit=None,
+               headline=None, volume=100):
     ffmpeg = find_ffmpeg()
     os.makedirs(outdir, exist_ok=True)
     base = safe_name(name or video_title(source))
@@ -516,7 +526,7 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
             if add_captions and (use_speech or words) and not clip_words:
                 print("    (no speech in this clip, so no captions)")
             convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, clip_words, caption_style,
-                    credit=credit)
+                    credit=credit, headline=headline, volume=volume)
             print(f"    saved {dest}")
             made.append(dest)
     return made
@@ -650,6 +660,11 @@ def main():
                      help="burn in animated word-by-word captions")
     cap.add_argument("--credit", metavar="TEXT",
                      help='text shown on screen the whole clip, e.g. "twitch.tv/Lysium"')
+    cap.add_argument("--headline", metavar="TEXT",
+                     help='big text on screen the whole clip; " | " starts a new line')
+    cap.add_argument("--volume", type=int, default=100, metavar="PCT",
+                     help="original audio level 0-100; 0 removes it (add a song in TikTok/Reels)")
+    cap.add_argument("--mute", action="store_true", help="same as --volume 0")
     cap.add_argument("--transcribe", action="store_true",
                      help="write captions with speech-to-text on this computer, "
                           "even if YouTube has captions (needs faster-whisper)")
@@ -692,7 +707,8 @@ def main():
 
     made = make_clips(source, clips, kind, a.out, a.name or title, a.quality,
                       a.gif_width, a.gif_fps, a.captions, a.caption_style,
-                      "always" if a.transcribe else "auto", a.credit)
+                      "always" if a.transcribe else "auto", a.credit, a.headline,
+                      0 if a.mute else a.volume)
     print(f"\nDone. {len(made)} clip(s) saved in: {os.path.abspath(a.out)}")
 
 

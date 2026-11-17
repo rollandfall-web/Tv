@@ -300,8 +300,14 @@ def job_make(job, p):
         credit = (p.get("credit") or "").strip()[:80] or None
         if credit and not clip.has_captions_support(ffmpeg):
             job.log("Your ffmpeg can't draw text, so the credit wasn't added (Mac fix: brew install ffmpeg-full).")
+        headline = (p.get("headline") or "").strip()[:200] or None
+        try:
+            volume = int(p.get("volume", 100))
+        except (TypeError, ValueError):
+            volume = 100
         clip.convert(raw, dest, "mp4", ffmpeg, 480, 12, words, p.get("style") or "bold",
-                     lines, crop, on_progress=job.span(0.35, 1.0), credit=credit)
+                     lines, crop, on_progress=job.span(0.35, 1.0), credit=credit,
+                     headline=headline, volume=volume)
     return {"file": "/out/" + os.path.basename(dest), "name": os.path.basename(dest)}
 
 
@@ -535,6 +541,7 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 .drag:active{cursor:grabbing}
 .cap{position:absolute;left:6%;right:6%;text-align:center;pointer-events:none;line-height:1.15}
 .cap .box{box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.headline{position:absolute;left:7%;right:7%;text-align:center;pointer-events:none;color:#fff;font-weight:800;font-family:Arial,sans-serif;-webkit-text-stroke:3px #000;paint-order:stroke fill;white-space:pre-line;line-height:1.15}
 .credit{position:absolute;left:4%;right:4%;text-align:center;pointer-events:none;color:#fff;font-weight:800;font-family:Arial,sans-serif;-webkit-text-stroke:2px #000;paint-order:stroke fill}
 .cap span.wd{display:inline-block;transition:transform .08s;margin:0 .06em}
 .playbar{display:flex;gap:8px;align-items:center;margin-top:10px}
@@ -634,6 +641,7 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
           <video id="vid" playsinline preload="auto"></video>
           <div id="cap" class="cap"></div>
           <div id="creditPrev" class="credit"></div>
+          <div id="headPrev" class="headline"></div>
           <div id="drag" class="drag" title="Drag to move the picture. Click to play or pause."></div>
         </div></div>
         <div class="ctl"><label>Zoom</label><input id="zoom" type="range" min="1" max="3" step="0.05" value="1"><output></output></div>
@@ -655,6 +663,10 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
       <div>
         <div class="ctl" style="grid-template-columns:140px 1fr"><label for="credit">Credit on screen</label><input id="credit" type="text" placeholder="e.g. twitch.tv/Lysium" maxlength="80"></div>
         <p class="hint" style="margin:-2px 0 12px">Shown near the top for the whole clip. Many campaigns require the streamer's handle.</p>
+        <div class="ctl" style="grid-template-columns:140px 1fr"><label for="headline">Headline text</label><textarea id="headline" rows="2" maxlength="200" placeholder="e.g. When GTA 6 finally drops tomorrow"></textarea></div>
+        <p class="hint" style="margin:-2px 0 12px">Big text across the top for the whole clip, for edits with music and no talking. Press Enter for a new line.</p>
+        <div class="ctl"><label for="volume">Original audio</label><input id="volume" type="range" min="0" max="100" step="5" value="100"><output></output></div>
+        <p class="hint" style="margin:-2px 0 12px">0% removes the clip's own sound, ready for adding a song in TikTok or Reels. Around 20% keeps game sounds quietly under music.</p>
         <label class="chk"><input id="capOn" type="checkbox" checked> Captions</label>
         <span class="hint" style="margin-left:6px">Off if the video already has subtitles.</span>
 
@@ -981,7 +993,7 @@ function readStyle(){
 }
 function showOutputs(){
   document.querySelectorAll(".ctl").forEach(c => { const i = c.querySelector("input[type=range]"), o = c.querySelector("output");
-    if (i && o) o.textContent = i.id.includes("opacity") ? i.value + "%" : (i.id === "zoom" ? (+i.value).toFixed(2) + "×" : i.value); });
+    if (i && o) o.textContent = (i.id.includes("opacity") || i.id === "volume") ? i.value + "%" : (i.id === "zoom" ? (+i.value).toFixed(2) + "×" : i.value); });
 }
 document.querySelectorAll("#capPanel input, #capPanel select").forEach(el => {
   if (el.closest("#lines")) return;
@@ -1004,8 +1016,19 @@ function renderCredit(){
   el.style.fontSize = (H * (vertical ? 0.03 : 0.045)) + "px";
 }
 $("#credit").addEventListener("input", () => { store.set("credit", $("#credit").value); renderCredit(); });
+function renderHeadline(){
+  const el = $("#headPrev"), H = $("#frame").clientHeight, vertical = S.aspect !== "16:9";
+  el.textContent = $("#headline").value.trim();
+  el.style.top = (vertical ? 19 : 12) + "%";
+  el.style.fontSize = (H * (vertical ? 0.045 : 0.07)) + "px";
+}
+$("#headline").addEventListener("input", renderHeadline);
+$("#volume").addEventListener("input", () => {
+  const v = +$("#volume").value; vid().volume = v / 100; vid().muted = v === 0;
+  $("#volume").parentElement.querySelector("output").textContent = v + "%";
+});
 function renderCap(){
-  renderCredit();
+  renderCredit(); renderHeadline();
   const cap = $("#cap"), st = S.style;
   if (!$("#capOn").checked || !S.lines.length) { cap.innerHTML = ""; return; }
   const t = vid().currentTime || 0;
@@ -1039,7 +1062,8 @@ $("#makeBtn").onclick = async () => {
     const r = await runJob("/api/make", {url:$("#url").value.trim(), browser:$("#browser").value,
       sec_start:S.prep.sec_start, sec_end:S.prep.sec_end, cut_in:S.cut[0], cut_out:S.cut[1],
       title:S.title || S.clip.title || "", aspect:S.aspect, crop:S.crop,
-      captions:$("#capOn").checked, words, lines, style:S.style, credit:$("#credit").value.trim()}, $("#makeStatus"));
+      captions:$("#capOn").checked, words, lines, style:S.style, credit:$("#credit").value.trim(),
+      headline:$("#headline").value.trim(), volume:+$("#volume").value}, $("#makeStatus"));
     $("#result").innerHTML = `<video src="${r.file}" controls playsinline></video><div class="hint">Saved as <b>${escapeHtml(r.name)}</b> in ${escapeHtml(S.info.out_dir)}</div>`;
   } catch(e) {} finally { $("#makeBtn").disabled = false; }
 };

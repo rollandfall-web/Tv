@@ -71,29 +71,35 @@ once and leave those details out of messages.
 
 1. **Create the folder** with `outreach.py new`.
 2. **Research and fill `profile.md`:** platform and channel link, audience size
-   (followers or average viewers, with the date you saw it), what their content
-   is like, whether they run a clipping program or pay clippers (e.g. on Whop
-   Content Rewards or a campaign site) with its link and rules, and their best
-   public contact (business email, contact form, Discord server, or a DM
-   channel they say they accept). Put every source link under "Sources".
-   Only use contact details the streamer published for business or fans; never
-   look for private or personal contact information.
+   (followers or average viewers, exactly as shown, with the date you saw it),
+   what their content is like, whether they run a clipping program or pay
+   clippers (e.g. on Whop Content Rewards or a campaign site) with its link and
+   rules, and their best public contact (business email, contact form, Discord
+   server, or a DM channel they say they accept). Put every source link under
+   "Sources" and every screenshot on the `Evidence:` line. Only use contact
+   details the streamer published for business or fans; never look for private
+   or personal contact information.
 3. **Clipping program? Fill `forms.md`.** Open the program's sign-up or
    application form, copy each question, and write a draft answer from
    `about-me.md`. Note which fields need the commander (logins, payment details,
    tax info, ID): write "COMMANDER FILLS IN" for those. Do not submit.
 4. **No program? Draft a first message** in `messages/01-first-contact.md`:
-   - Top lines: `To:` (address or channel), `Channel:` (email, Discord, form...),
+   - Top lines: `To:` (address or channel), `Channel:` (email, Discord, X...),
      `Subject:` (for email).
-   - Under 80 words, friendly and specific: name one thing about their content,
-     offer a free sample clip, say clips credit and link to them, ask if they're
-     open to it. Sign with the name in `about-me.md`.
-   - Honest: no invented numbers, no pretending to be a fan of things you haven't
-     checked, no pressure, no promises about views or money.
+   - Under 80 words, friendly and specific: name one thing about their content
+     that you actually saw on their page, offer a free sample clip, say clips
+     credit and link to them, ask if they're open to it. Sign with the name in
+     `about-me.md`.
+   - Honest: no invented numbers, no quotes you didn't read, no pretending to be
+     a fan of things you haven't checked, no pressure, no promises about views
+     or money.
+   - Only draft a message when the profile has evidence. If the profile shows
+     MISSING evidence in `outreach.py verify`, say so instead of drafting.
 5. **Sample clip:** ask the crew member with the clip-maker skill to make one
-   vertical clip with captions from a recent video of theirs, saved into
-   `Outreach/<Streamer>/samples/` (`-o "Outreach/<Streamer>/samples"`).
-   It is for showing them only; never post it.
+   vertical clip with captions and `--credit "twitch.tv/NAME"` from a recent
+   video of theirs, saved into `Outreach/<Streamer>/samples/`
+   (`-o "Outreach/<Streamer>/samples"`). It is for showing them only; never
+   post it.
 6. **Set status** to `drafted` and tell the commander it's ready to send.
 
 ## After the commander sends or gets a reply
@@ -102,9 +108,11 @@ When the commander says they sent something or got a reply, record it:
 
 - `outreach.py log "<Streamer>" sent email "what was sent, one line"`
 - `outreach.py log "<Streamer>" received email "what they said, one line"`
-- If they said yes: `outreach.py status "<Streamer>" approved`, and add the
-  streamer's channels to the approved list the lead keeps in memory, with any
-  rules they gave (tags, credit format, platforms) in `profile.md` Notes.
+- If they said yes: ask the commander for a screenshot of the reply, save it in
+  `evidence/`, list it on the `Evidence:` line, then run
+  `outreach.py status "<Streamer>" approved`. Add any rules they gave (tags,
+  credit format, platforms) to `profile.md` Notes, and tell the lead so the
+  streamer goes on the approved list.
 - If they said no: `status ... declined`. Don't contact them again.
 - No reply after 7 days: draft **one** polite follow-up as
   `messages/02-follow-up.md`. After that, set `no reply` and stop.
@@ -113,6 +121,6 @@ Only record what actually happened; don't guess replies.
 
 ## Report
 
-Give the commander: the tracker (`outreach.py list`), which drafts are ready to
-send (with their file paths), which forms need their details, and anything
-you couldn't find.
+Give the commander: the tracker (`outreach.py list`), the `outreach.py verify`
+output as printed, which drafts are ready to send (with their file paths),
+which forms need their details, and anything you couldn't find.

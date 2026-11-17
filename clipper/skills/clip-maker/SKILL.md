@@ -74,6 +74,10 @@ yt-dlp --flat-playlist -I 1:10 --print "%(title)s | %(duration_string)s | %(url)
 Some fields can show `NA` (for example views in search results); that's normal.
 Return the list as it is. Finding a video is not permission to clip it.
 
+If Twitch or YouTube refuses (sign-in needed, subscriber-only, age-restricted),
+add `--cookies-from-browser chrome` to yt-dlp, or `--browser chrome` to clip.py.
+That uses the commander's own Chrome sign-in; never ask for a password.
+
 ## Find the best moments (no cutting)
 
 ```bash
@@ -83,6 +87,7 @@ python3 clipper/clip.py "LINK" --auto --list --json --count 5
 The last line of the output starts with `@@PICKS@@` followed by JSON:
 `{"title": ..., "clips": [{"start": 41.0, "end": 63.5, "score": 82, "title": ..., "reason": ...}]}`.
 Times are seconds. Score is 0 to 100 and only compares moments within the same video.
+`--auto` works on a whole VOD; you never need timestamps to start.
 
 Useful options:
 
@@ -93,7 +98,7 @@ Useful options:
 | `--min 15 --max 45` | Clip length range in seconds (default 15 to 60). |
 | `--credit "twitch.tv/NAME"` | Shows the streamer's handle on screen for the whole clip. Use it whenever a campaign asks to "include the stream handle in the clip", and for any streamer you clip. |
 | `--skip-text` | Skip moments that already have subtitles or titles on screen (needs Tesseract). |
-| `--browser chrome` | Only if an error says the video is age-restricted or asks to "confirm you're not a bot". Uses Chrome's YouTube sign-in. |
+| `--browser chrome` | When a video needs sign-in, is age-restricted or asks to "confirm you're not a bot". Uses Chrome's sign-in. |
 
 ## Make the clips
 
@@ -136,13 +141,15 @@ commander exactly what it says. Common cases:
 
 | Message contains | Do this |
 |---|---|
-| `age-restricted` / `not a bot` | Run again with `--browser chrome`. |
+| `age-restricted` / `not a bot` / sign-in needed | Run again with `--browser chrome`. |
 | `CERTIFICATE_VERIFY_FAILED` | Ask the commander to run `python3 -m pip install -U certifi yt-dlp`. |
 | `Requested format is not available` | Ask the commander to run `brew install deno` and `python3 -m pip install -U "yt-dlp[default]"`. |
 | `can't draw captions` | Clips were still made, without captions. Ask the commander to run `brew install ffmpeg-full`. |
+| `unrecognized arguments` | The Clip Maker on disk is out of date. Ask the commander to update it. |
 | `yt-dlp is not installed` / `ffmpeg was not found` | Ask the commander to finish the setup in `clipper/README.md`. |
 
-Don't install software yourself unless the commander asks you to.
+Don't install software yourself unless the commander asks you to. Don't invent
+workarounds; report the exact error instead.
 
 ## Report back
 

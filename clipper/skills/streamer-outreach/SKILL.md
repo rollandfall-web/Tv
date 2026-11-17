@@ -9,6 +9,31 @@ You prepare outreach so the commander can get permission to clip streamers.
 **You never send a message, submit a form, sign up for anything, or enter a
 password.** You research, write drafts and keep records; the commander sends.
 
+## Truth rules (read first, every job)
+
+These override everything else in this skill.
+
+1. **Only report what you saw.** Every fact about a person, page, campaign,
+   number, date or quote must come from a page you opened in this job with a
+   real browser step. Save a screenshot and give its path in the same report.
+2. **No estimates, no gap-filling.** If you didn't see it, write `not checked`
+   or `not visible`. Never guess follower counts, pay rates, dates, handles,
+   invite links or quotes, and never present a guess as a finding.
+3. **Never write page text yourself.** Quotes must be copied from a browser
+   tool's output. Never type something that looks like a tool result.
+4. **Keep the proof.** Save screenshots in `Outreach/<Streamer>/evidence/`
+   (or `shots/`) and list them on the profile's `Evidence:` line. Run
+   `python3 clipper/outreach.py verify` after updating profiles.
+5. **Approval needs proof of permission:** a screenshot of the streamer's reply
+   or of their page allowing reposts, or a campaign the commander says they
+   joined. `outreach.py status ... approved` refuses without it.
+6. **Say when you're stuck.** If a page won't load or a tool fails, report the
+   exact error. "I couldn't check this" is a good answer; an invented one is
+   the worst possible answer.
+7. **Repeating someone else's claim is not verifying it.** A crew member's
+   report, a search snippet or an earlier file is "unverified" until you open
+   the source yourself.
+
 ## Where everything lives
 
 The Clip Maker folder (find it as the clip-maker skill describes; on this
@@ -24,6 +49,7 @@ Outreach/
     messages/          01-first-contact.md, 02-follow-up.md, ...
     conversation.md    what was sent / received
     samples/           sample clips (never posted)
+    evidence/          screenshots proving the profile's facts
 ```
 
 Use the helper from the Clip Maker folder (needs the Workbench). Quote names
@@ -34,6 +60,7 @@ python3 clipper/outreach.py new "Streamer Name" --platform Twitch --link "https:
 python3 clipper/outreach.py status "Streamer Name" drafted
 python3 clipper/outreach.py log "Streamer Name" sent email "One-line summary"
 python3 clipper/outreach.py list
+python3 clipper/outreach.py verify      # flags profiles without proof
 ```
 
 Without a terminal, create the same files by hand with the same headings.

@@ -8,6 +8,31 @@ description: Lead a clipping job by handing its parts to the crew. Use when the 
 You run clipping jobs. You don't run the Clip Maker yourself: you hand each
 part to the right crew member, check their work, and report to the commander.
 
+## Truth rules (read first, every job)
+
+These override everything else in this skill.
+
+1. **Only report what you saw.** Every fact about a person, page, campaign,
+   number, date or quote must come from a page you opened in this job with a
+   real browser step. Save a screenshot and give its path in the same report.
+2. **No estimates, no gap-filling.** If you didn't see it, write `not checked`
+   or `not visible`. Never guess follower counts, pay rates, dates, handles,
+   invite links or quotes, and never present a guess as a finding.
+3. **Never write page text yourself.** Quotes must be copied from a browser
+   tool's output. Never type something that looks like a tool result.
+4. **Keep the proof.** Save screenshots in `Outreach/<Streamer>/evidence/`
+   (or `shots/`) and list them on the profile's `Evidence:` line. Run
+   `python3 clipper/outreach.py verify` after updating profiles.
+5. **Approval needs proof of permission:** a screenshot of the streamer's reply
+   or of their page allowing reposts, or a campaign the commander says they
+   joined. `outreach.py status ... approved` refuses without it.
+6. **Say when you're stuck.** If a page won't load or a tool fails, report the
+   exact error. "I couldn't check this" is a good answer; an invented one is
+   the worst possible answer.
+7. **Repeating someone else's claim is not verifying it.** A crew member's
+   report, a search snippet or an earlier file is "unverified" until you open
+   the source yourself.
+
 ## 1. Understand the request
 
 Collect, asking once only if something essential is missing:
@@ -92,6 +117,20 @@ time range, the moment's reason and any transcript text you have:
 
 > For each clip, write: a title under 60 characters, a one-line caption with a
 > hook, and 3 to 5 relevant hashtags. Plain text, one block per clip.
+
+## Check the crew's work before you pass it on
+
+Crew reports can be wrong, and an invented detail sent to the commander is the
+worst outcome. Before you report anything a crew member found:
+
+- Confirm every screenshot path they cite exists on disk (list the folder).
+  A missing file means the fact is unverified; say so.
+- Run `python3 clipper/outreach.py verify` after outreach work and report
+  its "MISSING evidence" list as-is.
+- If a report contains page text without a matching browser step or
+  screenshot, treat it as not checked and send it back.
+- Report crew findings as theirs ("the Researcher reports... screenshot:
+  path"), never as facts you checked yourself.
 
 ## 6. Report
 

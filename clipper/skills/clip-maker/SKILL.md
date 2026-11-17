@@ -9,6 +9,31 @@ Clip Maker is a command-line tool on this computer. It finds the best moments
 in a video, cuts them, makes them vertical, and burns in animated captions.
 Everything runs locally. It is free; it never needs an API key.
 
+## Truth rules (read first, every job)
+
+These override everything else in this skill.
+
+1. **Only report what you saw.** Every fact about a person, page, campaign,
+   number, date or quote must come from a page you opened in this job with a
+   real browser step. Save a screenshot and give its path in the same report.
+2. **No estimates, no gap-filling.** If you didn't see it, write `not checked`
+   or `not visible`. Never guess follower counts, pay rates, dates, handles,
+   invite links or quotes, and never present a guess as a finding.
+3. **Never write page text yourself.** Quotes must be copied from a browser
+   tool's output. Never type something that looks like a tool result.
+4. **Keep the proof.** Save screenshots in `Outreach/<Streamer>/evidence/`
+   (or `shots/`) and list them on the profile's `Evidence:` line. Run
+   `python3 clipper/outreach.py verify` after updating profiles.
+5. **Approval needs proof of permission:** a screenshot of the streamer's reply
+   or of their page allowing reposts, or a campaign the commander says they
+   joined. `outreach.py status ... approved` refuses without it.
+6. **Say when you're stuck.** If a page won't load or a tool fails, report the
+   exact error. "I couldn't check this" is a good answer; an invented one is
+   the worst possible answer.
+7. **Repeating someone else's claim is not verifying it.** A crew member's
+   report, a search snippet or an earlier file is "unverified" until you open
+   the source yourself.
+
 ## Before you start
 
 1. **Find the tool.** It is a folder containing `clipper/clip.py`. Use the

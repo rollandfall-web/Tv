@@ -10,6 +10,7 @@ Usage (run from the Clip Maker folder):
   python3 clipper/outreach.py log "Streamer Name" sent email "First message, offered a sample clip"
   python3 clipper/outreach.py log "Streamer Name" received email "Said yes, clip away"
   python3 clipper/outreach.py status "Streamer Name" approved
+  python3 clipper/outreach.py verify           check every profile's evidence; un-approve any without proof
   python3 clipper/outreach.py tracker          rebuild Outreach/tracker.md
   python3 clipper/outreach.py list             print the tracker
 
@@ -21,7 +22,12 @@ import os
 import re
 import sys
 
-STATUSES = ["researching", "drafted", "sent", "replied", "approved", "declined", "no reply"]
+STATUSES = ["researching", "unverified", "drafted", "sent", "replied", "approved", "declined",
+            "no reply"]
+
+EVIDENCE_HELP = (
+    "Evidence = screenshot files proving the facts, saved in Outreach/<Streamer>/evidence/ "
+    "(or ClipMaker/shots/). List them in profile.md as: - **Evidence:** evidence/about-page.png, ...")
 
 ABOUT_ME = """# About me (the clipper)
 
@@ -53,8 +59,15 @@ message and submits every form**.
 | `messages/` | Drafted emails/DMs, numbered: `01-first-contact.md`, `02-follow-up.md`, ... |
 | `conversation.md` | Log of what was sent and what they replied, newest last |
 | `samples/` | Sample clips made from their videos (not posted) |
+| `evidence/` | Screenshots that prove the facts in profile.md (about page, permission, replies) |
 
-Statuses: researching, drafted, sent, replied, approved, declined, no reply.
+Statuses: researching, unverified, drafted, sent, replied, approved, declined, no reply.
+
+**Evidence rule:** facts in profile.md only count when a screenshot proves them.
+Save screenshots in `evidence/` and list them on the `Evidence:` line. A streamer
+can only be set to `approved` when the evidence includes proof of permission (their
+written reply, or their page saying clips may be reposted). `outreach.py verify`
+un-approves anyone without evidence. The tracker shows MISSING when proof is absent.
 `tracker.md` lists everyone; rebuild it with `python3 clipper/outreach.py tracker`.
 """
 
@@ -71,6 +84,7 @@ PROFILE = """# {name}
 - **Contact address:**
 - **Last contact:**
 - **Approved to clip:** no
+- **Evidence:**
 
 ## Notes
 
@@ -133,6 +147,7 @@ def cmd_new(a):
         return
     os.makedirs(os.path.join(path, "messages"))
     os.makedirs(os.path.join(path, "samples"))
+    os.makedirs(os.path.join(path, "evidence"))
     files = {"profile.md": PROFILE.format(name=a.name, platform=a.platform or "", link=a.link or ""),
              "forms.md": FORMS.format(name=a.name),
              "conversation.md": CONVERSATION.format(name=a.name)}
@@ -183,12 +198,33 @@ def cmd_log(a):
     print(f"Logged for {a.name}.")
 
 
+def evidence_files(root, folder, fields):
+    """Evidence paths listed in the profile that really exist on disk."""
+    found = []
+    clipmaker = os.path.dirname(root)
+    for item in re.split(r"[,\n]", fields.get("Evidence", "")):
+        item = item.strip().strip("`")
+        if not item:
+            continue
+        for base in (folder, clipmaker, root):
+            cand = item if os.path.isabs(item) else os.path.join(base, item)
+            if os.path.isfile(cand) and os.path.getsize(cand) > 0:
+                found.append(cand)
+                break
+    return found
+
+
 def cmd_status(a):
     root = outreach_root(a.root)
     path = streamer_dir(root, a.name)
     if a.status not in STATUSES:
         sys.exit("Status must be one of: " + ", ".join(STATUSES))
     profile = os.path.join(path, "profile.md")
+    if a.status == "approved" and not evidence_files(root, path, get_fields(profile)):
+        sys.exit(f"Refused: {a.name} has no evidence on disk, so they can't be approved.\n"
+                 "Save a screenshot of their permission (their reply, or their page allowing "
+                 "reposts) in their evidence/ folder and list it on the Evidence: line.\n"
+                 + EVIDENCE_HELP)
     set_field(profile, "Status", a.status)
     if a.status == "approved":
         set_field(profile, "Approved to clip", "yes")
@@ -196,6 +232,32 @@ def cmd_status(a):
         set_field(profile, "Approved to clip", "no")
     build_tracker(root)
     print(f"{a.name}: {a.status}")
+
+
+def cmd_verify(a):
+    root = outreach_root(a.root)
+    ensure_root(root)
+    missing, ok, downgraded = [], [], []
+    for entry in sorted(os.listdir(root), key=str.lower):
+        folder = os.path.join(root, entry)
+        profile = os.path.join(folder, "profile.md")
+        if not os.path.isfile(profile):
+            continue
+        f = get_fields(profile)
+        if evidence_files(root, folder, f):
+            ok.append(entry)
+            continue
+        missing.append(entry)
+        if f.get("Status") == "approved" or f.get("Approved to clip", "").lower().startswith("yes"):
+            set_field(profile, "Status", "unverified")
+            set_field(profile, "Approved to clip", "no")
+            downgraded.append(entry)
+    build_tracker(root)
+    print(f"With evidence ({len(ok)}): " + (", ".join(ok) or "none"))
+    print(f"MISSING evidence ({len(missing)}): " + (", ".join(missing) or "none"))
+    if downgraded:
+        print("Un-approved (no proof): " + ", ".join(downgraded))
+    print(EVIDENCE_HELP)
 
 
 def build_tracker(root):
@@ -207,16 +269,19 @@ def build_tracker(root):
         f = get_fields(profile)
         drafts = len([m for m in os.listdir(os.path.join(root, entry, "messages"))
                       if m.endswith(".md")]) if os.path.isdir(os.path.join(root, entry, "messages")) else 0
+        proof = len(evidence_files(root, os.path.join(root, entry), f))
         rows.append((entry, f.get("Status", ""), f.get("Platform", ""),
                      f.get("Clipping program", ""), f.get("Best contact", ""),
-                     f.get("Last contact", ""), f.get("Approved to clip", ""), str(drafts)))
+                     f.get("Last contact", ""), f.get("Approved to clip", ""),
+                     f"ok ({proof})" if proof else "MISSING", str(drafts)))
     order = {s: i for i, s in enumerate(["approved", "replied", "sent", "drafted",
-                                          "researching", "no reply", "declined"])}
+                                          "researching", "unverified", "no reply", "declined"])}
     rows.sort(key=lambda r: (order.get(r[1], 99), r[0].lower()))
     lines = ["# Outreach tracker", "",
              f"Updated {datetime.datetime.now():%Y-%m-%d %H:%M}. Rebuild: `python3 clipper/outreach.py tracker`", "",
-             "| Streamer | Status | Platform | Clipping program | Contact | Last contact | Approved | Drafts |",
-             "|---|---|---|---|---|---|---|---|"]
+             "Evidence MISSING means nothing in that row is proven yet. See README.md.", "",
+             "| Streamer | Status | Platform | Clipping program | Contact | Last contact | Approved | Evidence | Drafts |",
+             "|---|---|---|---|---|---|---|---|---|"]
     lines += ["| " + " | ".join(c.replace("|", "/") for c in r) + " |" for r in rows]
     with open(os.path.join(root, "tracker.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -256,6 +321,7 @@ def main():
     st.add_argument("status")
     st.set_defaults(fn=cmd_status)
     sub.add_parser("tracker", help="rebuild tracker.md").set_defaults(fn=cmd_tracker)
+    sub.add_parser("verify", help="check evidence; un-approve anyone without proof").set_defaults(fn=cmd_verify)
     sub.add_parser("list", help="print the tracker").set_defaults(fn=cmd_list)
     a = p.parse_args()
     a.fn(a)

@@ -342,7 +342,8 @@ def transcribe(media, ffmpeg, workdir, log=print, progress=None):
     if not backend:
         raise RuntimeError("Speech-to-text isn't installed. " + INSTALL_HINT)
     wav = os.path.join(workdir, "speech.wav")
-    r = subprocess.run([ffmpeg, "-y", "-i", media, "-vn", "-ac", "1", "-ar", "16000", wav],
+    r = subprocess.run([ffmpeg, "-y", "-i", media, "-vn", "-ac", "1", "-ar", "16000",
+                        "-c:a", "pcm_s16le", wav],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode != 0 or not os.path.isfile(wav):
         raise RuntimeError("Couldn't read the audio for transcription.")
@@ -359,13 +360,32 @@ def transcribe(media, ffmpeg, workdir, log=print, progress=None):
             "python3 -m pip install -U faster-whisper") from err
 
 
+def read_wav(path):
+    """16-bit mono WAV -> float32 numpy array in -1..1 (what Whisper expects)."""
+    import wave
+    import numpy as np
+    with wave.open(path, "rb") as w:
+        if w.getsampwidth() != 2:
+            raise RuntimeError("unexpected WAV format")
+        data = w.readframes(w.getnframes())
+        channels = w.getnchannels()
+    audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    return audio
+
+
 def _transcribe(backend, wav, prog):
     words = []
     if backend == "faster_whisper":
         from faster_whisper import WhisperModel
         if backend not in _MODEL:
             _MODEL[backend] = WhisperModel(WHISPER_SIZE, device="auto", compute_type="int8")
-        segments, info = _MODEL[backend].transcribe(wav, word_timestamps=True, vad_filter=True)
+        # Pass the audio as numbers instead of a file name: faster-whisper's own
+        # file reader (PyAV) breaks with some versions ("unexpected keyword
+        # argument 'metadata_errors'"), and we already have a plain 16 kHz WAV.
+        segments, info = _MODEL[backend].transcribe(read_wav(wav), word_timestamps=True,
+                                                    vad_filter=True)
         total = float(getattr(info, "duration", 0) or 0)
         for seg in segments:
             if total:

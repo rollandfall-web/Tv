@@ -539,7 +539,10 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 .frame video{position:absolute;max-width:none;object-fit:fill}
 .drag{position:absolute;inset:0;cursor:grab}
 .drag:active{cursor:grabbing}
-.cap{position:absolute;left:6%;right:6%;text-align:center;pointer-events:none;line-height:1.15}
+.cap{position:absolute;left:6%;right:6%;text-align:center;pointer-events:none;line-height:1.15;transform-origin:50% 100%}
+.cap.movable{pointer-events:auto;cursor:move;z-index:3;touch-action:none}
+.cap.movable:hover,.cap.moving{outline:2px dashed rgba(255,255,255,.7);outline-offset:4px;border-radius:4px}
+.cap.ghost{opacity:.55}
 .cap .box{box-decoration-break:clone;-webkit-box-decoration-break:clone}
 .headline{position:absolute;left:7%;right:7%;text-align:center;pointer-events:none;color:#fff;font-weight:800;font-family:Arial,sans-serif;-webkit-text-stroke:3px #000;paint-order:stroke fill;white-space:pre-line;line-height:1.15}
 .credit{position:absolute;left:4%;right:4%;text-align:center;pointer-events:none;color:#fff;font-weight:800;font-family:Arial,sans-serif;-webkit-text-stroke:2px #000;paint-order:stroke fill}
@@ -692,6 +695,13 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
         </select><span></span></div>
         <div class="ctl"><label>Size</label><input id="size" type="range" min="1.5" max="14" step="0.1"><output></output></div>
         <div class="ctl"><label>Position (from bottom)</label><input id="position" type="range" min="2" max="90" step="1"><output></output></div>
+        <div class="ctl"><label>Left / right</label><input id="x" type="range" min="10" max="90" step="1"><output></output></div>
+        <p class="hint" style="margin:-2px 0 8px">Or drag the captions on the video. Keep them above the bottom 20%, where TikTok puts the caption and buttons.</p>
+        <div class="ctl"><label>Animation</label><select id="animation">
+          <option value="none">None</option><option value="pop">Pop (spoken word grows)</option>
+          <option value="bounce">Bounce in</option><option value="fade">Fade in</option>
+          <option value="slide">Slide up</option><option value="typewriter">Typewriter (word by word)</option>
+        </select><span></span></div>
         <div class="ctl"><label>Text color</label><input id="color" type="color"><span></span></div>
         <div class="ctl"><label>Highlight color</label><input id="highlight" type="color"><span></span></div>
         <div class="ctl"><label>Outline</label><input id="outline" type="range" min="0" max="25" step="1"><output></output></div>
@@ -700,7 +710,6 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
           <label class="chk"><input id="bold" type="checkbox"> Bold</label>
           <label class="chk"><input id="uppercase" type="checkbox"> UPPERCASE</label>
           <label class="chk"><input id="hlword" type="checkbox"> Highlight spoken word</label>
-          <label class="chk"><input id="pop" type="checkbox"> Pop</label>
           <label class="chk"><input id="shadow" type="checkbox"> Shadow</label>
         </div>
 
@@ -727,8 +736,8 @@ const $ = s => document.querySelector(s);
 const vid = () => $("#vid");
 const S = {info:null, title:"", clip:null, prep:null, aspect:"9:16", style:{}, lines:[], dims:[1280,720],
            crop:{x:0.5, y:0.5, zoom:1}, cut:[0,0]};
-const STYLE_KEYS = ["font","size","position","color","highlight","outline","outline_color","text_opacity","box_color","box_opacity","words_per_line"];
-const CHECK_KEYS = ["bold","uppercase","pop","shadow","box"];
+const STYLE_KEYS = ["font","size","position","x","animation","color","highlight","outline","outline_color","text_opacity","box_color","box_opacity","words_per_line"];
+const CHECK_KEYS = ["bold","uppercase","shadow","box"];
 const RATIO = {"9:16":9/16, "4:5":4/5, "1:1":1, "16:9":16/9};
 const store = {get(k, d){ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch(e){ return d; } },
                set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }};
@@ -978,7 +987,8 @@ $("#addLine").onclick = () => {
 // ---------------------------------------------------------------- style controls
 function hex2rgba(h, a){ h = h.replace("#",""); return `rgba(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)},${a})`; }
 function loadStyle(st){
-  S.style = {...st};
+  S.style = {x:50, ...st};
+  if (!S.style.animation) S.style.animation = S.style.pop ? "pop" : "none";
   STYLE_KEYS.forEach(k => { const el = document.getElementById(k === "words_per_line" ? "wpl" : k); if (el) el.value = st[k]; });
   CHECK_KEYS.forEach(k => { $("#" + k).checked = !!st[k]; });
   $("#hlword").checked = st.highlight_mode === "word";
@@ -989,7 +999,8 @@ function readStyle(){
     S.style[k] = (el.type === "range") ? +el.value : el.value; });
   CHECK_KEYS.forEach(k => { S.style[k] = $("#" + k).checked; });
   S.style.highlight_mode = $("#hlword").checked ? "word" : "none";
-  showOutputs();
+  S.style.pop = S.style.animation === "pop";
+  showOutputs(); renderCap();
 }
 function showOutputs(){
   document.querySelectorAll(".ctl").forEach(c => { const i = c.querySelector("input[type=range]"), o = c.querySelector("output");
@@ -1030,15 +1041,27 @@ $("#volume").addEventListener("input", () => {
 function renderCap(){
   renderCredit(); renderHeadline();
   const cap = $("#cap"), st = S.style;
+  cap.classList.remove("movable", "ghost"); cap.style.transform = ""; cap.style.opacity = "";
   if (!$("#capOn").checked || !S.lines.length) { cap.innerHTML = ""; return; }
   const t = vid().currentTime || 0;
-  const line = S.lines.find(l => t >= l[0].s && t < lineEnd(l));
+  let line = S.lines.find(l => t >= l[0].s && t < lineEnd(l));
   document.querySelectorAll(".line").forEach(d => d.classList.toggle("now", S.lines[+d.dataset.i] === line));
-  if (!line || t < S.cut[0] || t > S.cut[1]) { cap.innerHTML = ""; return; }
-  let active = -1; line.forEach((w, i) => { if (w.s <= t) active = i; });
+  if (line && (t < S.cut[0] || t > S.cut[1])) line = null;
+  let ghost = false;
+  if (!line) {               // paused between lines: show one faded so it can be dragged into place
+    if (!vid().paused) { cap.innerHTML = ""; return; }
+    line = S.lines.find(l => lineEnd(l) > S.cut[0]) || S.lines[0]; ghost = true;
+  }
+  cap.classList.add("movable"); cap.classList.toggle("ghost", ghost);
+  let active = -1; if (!ghost) line.forEach((w, i) => { if (w.s <= t) active = i; });
   const H = $("#frame").clientHeight, size = H * st.size / 100;
   const op = st.text_opacity / 100, ow = size * st.outline / 100;
   cap.style.bottom = st.position + "%";
+  const x = st.x == null ? 50 : st.x; cap.style.left = (x - 44) + "%"; cap.style.right = (56 - x) + "%";
+  const anim = st.animation || (st.pop ? "pop" : "none"), p = ghost ? 9 : t - line[0].s;
+  if (anim === "fade") cap.style.opacity = Math.min(1, p / 0.16);
+  if (anim === "bounce") cap.style.transform = `scale(${p < 0.09 ? 0.7 + 0.38 * p / 0.09 : p < 0.17 ? 1.08 - 0.08 * (p - 0.09) / 0.08 : 1})`;
+  if (anim === "slide") { const q = Math.min(1, p / 0.16); cap.style.transform = `translateY(${(1 - q) * size * 0.8}px)`; cap.style.opacity = Math.min(1, p / 0.12); }
   cap.style.fontFamily = `"${st.font}", Arial, sans-serif`;
   cap.style.fontSize = size + "px"; cap.style.fontWeight = st.bold ? "800" : "400";
   const box = st.box ? `background:${hex2rgba(st.box_color, st.box_opacity/100)};padding:${size*0.12}px ${size*0.2}px;` : "";
@@ -1046,12 +1069,35 @@ function renderCap(){
   const html = line.map((w, i) => {
     const txt = escapeHtml(st.uppercase ? w.w.toUpperCase() : w.w);
     const on = i === active && st.highlight_mode === "word";
+    const hide = anim === "typewriter" && !ghost && i > active ? "visibility:hidden;" : "";
     const col = hex2rgba(on || w.emph ? st.highlight : st.color, op);
-    const scale = on && st.pop ? "transform:scale(1.12);" : "";
-    return `<span class="wd" style="color:${col};-webkit-text-stroke:${ow*2}px ${hex2rgba(st.outline_color, op)};paint-order:stroke fill;${shadow}${scale}">${txt}</span>`;
+    const scale = on && anim === "pop" ? "transform:scale(1.12);" : "";
+    return `<span class="wd" style="color:${col};-webkit-text-stroke:${ow*2}px ${hex2rgba(st.outline_color, op)};paint-order:stroke fill;${shadow}${scale}${hide}">${txt}</span>`;
   }).join(" ");
   cap.innerHTML = `<span class="box" style="${box}">${html}</span>`;
+  // Same rule as the final render: pull the line in so none of it goes off screen.
+  const W = $("#frame").clientWidth, tw = Math.min(cap.firstChild.getBoundingClientRect().width, W * 0.88);
+  const half = tw / 2 / W * 100, cx = Math.max(half + 3, Math.min(100 - half - 3, x));
+  cap.style.left = (cx - 44) + "%"; cap.style.right = (56 - cx) + "%";
 }
+
+(function(){                // drag the captions to place them
+  const cap = $("#cap"); let d = null;
+  cap.addEventListener("pointerdown", e => {
+    e.preventDefault(); e.stopPropagation(); cap.setPointerCapture(e.pointerId);
+    const r = $("#frame").getBoundingClientRect();
+    d = {x:e.clientX, y:e.clientY, w:r.width, h:r.height, x0:S.style.x == null ? 50 : S.style.x, p0:S.style.position};
+    cap.classList.add("moving");
+  });
+  cap.addEventListener("pointermove", e => {
+    if (!d) return;
+    S.style.x = Math.round(Math.max(10, Math.min(90, d.x0 + (e.clientX - d.x) / d.w * 100)));
+    S.style.position = Math.round(Math.max(2, Math.min(90, d.p0 - (e.clientY - d.y) / d.h * 100)));
+    $("#x").value = S.style.x; $("#position").value = S.style.position; showOutputs(); renderCap();
+  });
+  const end = () => { d = null; cap.classList.remove("moving"); };
+  cap.addEventListener("pointerup", end); cap.addEventListener("pointercancel", end);
+})();
 
 // ---------------------------------------------------------------- make
 $("#makeBtn").onclick = async () => {

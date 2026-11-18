@@ -126,16 +126,23 @@ def chunk_words(words, max_words):
 
 
 PRESETS = {
-    # size = % of video height, outline = % of font size, position = % from bottom
+    # size = % of video height, outline = % of font size, position = % from bottom,
+    # x = % from the left edge (where the middle of the caption sits)
     "bold": dict(font="Arial", bold=True, size=5.0, uppercase=True, words_per_line=3,
                  color="#FFFFFF", highlight="#FFE000", highlight_mode="word", pop=True,
+                 animation="pop",
                  outline=9, outline_color="#000000", shadow=True, text_opacity=100,
-                 box=False, box_color="#000000", box_opacity=60, position=28),
+                 box=False, box_color="#000000", box_opacity=60, position=28, x=50),
     "clean": dict(font="Arial", bold=True, size=3.4, uppercase=False, words_per_line=6,
                   color="#FFFFFF", highlight="#55FF55", highlight_mode="word", pop=False,
+                  animation="none",
                   outline=6, outline_color="#000000", shadow=True, text_opacity=100,
-                  box=False, box_color="#000000", box_opacity=60, position=28),
+                  box=False, box_color="#000000", box_opacity=60, position=28, x=50),
 }
+
+# How each caption line appears. "pop" grows the word being spoken; the others
+# animate the whole line as it comes on screen; "typewriter" reveals word by word.
+ANIMATIONS = ["none", "pop", "bounce", "fade", "slide", "typewriter"]
 
 
 def preset(name, vertical=True):
@@ -218,6 +225,9 @@ def build_ass(words, width, height, style="bold", lines=None, credit=None, headl
     """
     if isinstance(style, str):
         style = preset(style, vertical=height > width)
+    anim = style.get("animation")
+    if anim not in ANIMATIONS:          # older styles only had the pop checkbox
+        anim = "pop" if style.get("pop", PRESETS["bold"]["pop"]) else "none"
     st = dict(PRESETS["bold"], **style)
     words = norm_words(words)
 
@@ -267,7 +277,27 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         t = clean_word(w["w"])
         return t.upper() if st["uppercase"] else t
 
-    pop = r"\fscx112\fscy112" if st["pop"] else ""
+    pop = r"\fscx112\fscy112" if anim == "pop" else ""
+    xpct = max(0.0, min(100.0, float(st.get("x", 50))))
+    py = height - margin_v
+    bounce = r"\fscx70\fscy70\t(0,90,\fscx108\fscy108)\t(90,170,\fscx100\fscy100)"
+    keep = bounce if anim == "bounce" else ""      # re-applied after each word's reset
+    per_char = 0.62 if st["uppercase"] else 0.55     # rough width of a bold Arial letter
+
+    def line_x(texts):
+        """Where this line's middle goes, pulled in so the whole line stays on screen."""
+        est = min(width - 2 * margin_h, size * per_char * len(" ".join(texts)))
+        half, pad = est / 2, width * 0.03
+        return round(max(half + pad, min(width - half - pad, width * xpct / 100)))
+
+    def lead(first, lx):
+        place = f"\\an2\\pos({lx},{py})"
+        if not first:
+            return "{" + place + "}"
+        if anim == "slide":
+            return "{\\an2" + f"\\move({lx},{py + round(size * 0.8)},{lx},{py},0,160)\\fad(120,0)" + "}"
+        return "{" + place + {"fade": r"\fad(160,0)", "bounce": bounce}.get(anim, "") + "}"
+
     events = []
     for idx in lines or []:
         chunk = [words[i] for i in idx if 0 <= i < len(words)]
@@ -277,10 +307,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         start, end = chunk[0]["s"], max(w["e"] for w in chunk)
         if end - start < 0.02:
             continue
+        lx = line_x(texts)
         if st["box"]:
             events.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Box,,0,0,0,,"
-                          + " ".join(texts))
-        if st["highlight_mode"] == "word":
+                          + lead(True, lx) + " ".join(texts))
+        if st["highlight_mode"] == "word" or anim == "typewriter":
             spans = []
             for i, w in enumerate(chunk):
                 e = chunk[i + 1]["s"] if i + 1 < len(chunk) else end
@@ -288,16 +319,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     spans.append((w["s"], e, i))
         else:
             spans = [(start, end, None)]
-        for s, e, active in spans:
+        for n, (s, e, active) in enumerate(spans):
+            reset = "{\\r" + (keep if n == 0 else "") + "}"
             parts = []
+            lit = st["highlight_mode"] == "word"
             for j, (w, t) in enumerate(zip(chunk, texts)):
-                if j == active:
-                    parts.append(f"{{\\c{hl}{pop}}}{t}{{\\r}}")
+                if anim == "typewriter" and active is not None and j > active:
+                    parts.append(f"{{\\alpha&HFF&}}{t}{reset}")
+                elif j == active and lit:
+                    parts.append(f"{{\\c{hl}{pop}}}{t}{reset}")
                 elif w["emph"]:
-                    parts.append(f"{{\\c{hl}}}{t}{{\\r}}")
+                    parts.append(f"{{\\c{hl}}}{t}{reset}")
                 else:
                     parts.append(t)
-            events.append(f"Dialogue: 1,{ass_time(s)},{ass_time(e)},Cap,,0,0,0,,{' '.join(parts)}")
+            events.append(f"Dialogue: 1,{ass_time(s)},{ass_time(e)},Cap,,0,0,0,,"
+                          + lead(n == 0, lx) + " ".join(parts))
     if credit_event:
         events.append(credit_event)
     if head_event:

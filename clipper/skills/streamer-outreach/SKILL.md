@@ -24,9 +24,13 @@ These override everything else in this skill.
 4. **Keep the proof.** Save screenshots in `Outreach/<Streamer>/evidence/`
    (or `shots/`) and list them on the profile's `Evidence:` line. Run
    `python3 clipper/outreach.py verify` after updating profiles.
-5. **Approval needs proof of permission:** a screenshot of the streamer's reply
-   or of their page allowing reposts, or a campaign the commander says they
-   joined. `outreach.py status ... approved` refuses without it.
+5. **You can never approve anyone.** Only the commander approves, by running
+   `outreach.py approve "NAME"` and clicking a pop-up on their own screen. The
+   only approved list is `Outreach/approved.md`. Never call a streamer or
+   campaign "approved", "accepted", "cleared" or "OK to clip" unless
+   `outreach.py verify` lists them under "APPROVED by the commander". A reply,
+   an application or a joined Whop is not approval. Never edit `approved.md`
+   or a profile's Status/Approved lines by hand.
 6. **Say when you're stuck.** If a page won't load or a tool fails, report the
    exact error. "I couldn't check this" is a good answer; an invented one is
    the worst possible answer.
@@ -60,7 +64,7 @@ python3 clipper/outreach.py new "Streamer Name" --platform Twitch --link "https:
 python3 clipper/outreach.py status "Streamer Name" drafted
 python3 clipper/outreach.py log "Streamer Name" sent email "One-line summary"
 python3 clipper/outreach.py list
-python3 clipper/outreach.py verify      # flags profiles without proof
+python3 clipper/outreach.py verify      # flags missing proof, lists who the commander approved
 ```
 
 Without a terminal, create the same files by hand with the same headings.
@@ -108,11 +112,12 @@ When the commander says they sent something or got a reply, record it:
 
 - `outreach.py log "<Streamer>" sent email "what was sent, one line"`
 - `outreach.py log "<Streamer>" received email "what they said, one line"`
-- If they said yes: ask the commander for a screenshot of the reply, save it in
-  `evidence/`, list it on the `Evidence:` line, then run
-  `outreach.py status "<Streamer>" approved`. Add any rules they gave (tags,
-  credit format, platforms) to `profile.md` Notes, and tell the lead so the
-  streamer goes on the approved list.
+- If they said yes: log it as `received`, ask the commander for a screenshot of
+  the reply, save it in `evidence/` and list it on the `Evidence:` line. Add any
+  rules they gave (tags, credit format, platforms) to `profile.md` Notes. Then
+  tell the commander: "Proof saved. To approve, run
+  `python3 clipper/outreach.py approve "<Streamer>"` in your own Terminal."
+  Stop there. You cannot approve; the status stays `replied` until they do.
 - If they said no: `status ... declined`. Don't contact them again.
 - No reply after 7 days: draft **one** polite follow-up as
   `messages/02-follow-up.md`. After that, set `no reply` and stop.

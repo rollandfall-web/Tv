@@ -9,7 +9,8 @@ Usage (run from the Clip Maker folder):
   python3 clipper/outreach.py new "Streamer Name" --platform Twitch --link URL
   python3 clipper/outreach.py log "Streamer Name" sent email "First message, offered a sample clip"
   python3 clipper/outreach.py log "Streamer Name" received email "Said yes, clip away"
-  python3 clipper/outreach.py status "Streamer Name" approved
+  python3 clipper/outreach.py approve "Streamer Name"   COMMANDER ONLY: opens a pop-up you click yourself
+  python3 clipper/outreach.py revoke "Streamer Name"    take an approval back
   python3 clipper/outreach.py verify           check every profile's evidence; un-approve any without proof
   python3 clipper/outreach.py tracker          rebuild Outreach/tracker.md
   python3 clipper/outreach.py list             print the tracker
@@ -18,12 +19,28 @@ Use --root FOLDER to keep Outreach somewhere other than ./Outreach.
 """
 import argparse
 import datetime
+import hashlib
 import os
 import re
+import subprocess
 import sys
 
 STATUSES = ["researching", "unverified", "drafted", "sent", "replied", "approved", "declined",
             "no reply"]
+
+# Approvals live only in this ledger, written only by `approve`, which needs the
+# commander to click a pop-up on their own screen. A profile that says approved
+# without a matching ledger line is reset by every list/tracker/verify run.
+LEDGER = "approved.md"
+LEDGER_HEAD = """# Approved to clip (commander's list)
+
+Only `python3 clipper/outreach.py approve "NAME"` adds a line here, after the
+commander clicks Approve in a pop-up on their own screen. Agents can't approve.
+If you see a name here you didn't approve yourself, delete its line.
+
+| Streamer | Approved on | Proof | Fingerprint |
+|---|---|---|---|
+"""
 
 EVIDENCE_HELP = (
     "Evidence = screenshot files proving the facts, saved in Outreach/<Streamer>/evidence/ "
@@ -64,10 +81,10 @@ message and submits every form**.
 Statuses: researching, unverified, drafted, sent, replied, approved, declined, no reply.
 
 **Evidence rule:** facts in profile.md only count when a screenshot proves them.
-Save screenshots in `evidence/` and list them on the `Evidence:` line. A streamer
-can only be set to `approved` when the evidence includes proof of permission (their
-written reply, or their page saying clips may be reposted). `outreach.py verify`
-un-approves anyone without evidence. The tracker shows MISSING when proof is absent.
+Save screenshots in `evidence/` and list them on the `Evidence:` line. **Only the commander approves.** `outreach.py approve "NAME"` opens a pop-up on
+the commander's screen showing the proof; it's added to `approved.md` only when
+they click Approve. Agents can't do this. Anyone marked approved any other way is
+reset to unverified the next time the tracker runs. The tracker shows MISSING when proof is absent.
 `tracker.md` lists everyone; rebuild it with `python3 clipper/outreach.py tracker`.
 """
 
@@ -219,25 +236,144 @@ def cmd_status(a):
     path = streamer_dir(root, a.name)
     if a.status not in STATUSES:
         sys.exit("Status must be one of: " + ", ".join(STATUSES))
-    profile = os.path.join(path, "profile.md")
-    if a.status == "approved" and not evidence_files(root, path, get_fields(profile)):
-        sys.exit(f"Refused: {a.name} has no evidence on disk, so they can't be approved.\n"
-                 "Save a screenshot of their permission (their reply, or their page allowing "
-                 "reposts) in their evidence/ folder and list it on the Evidence: line.\n"
-                 + EVIDENCE_HELP)
-    set_field(profile, "Status", a.status)
     if a.status == "approved":
-        set_field(profile, "Approved to clip", "yes")
-    elif a.status == "declined":
+        sys.exit("Refused: only the commander can approve, by clicking a pop-up on their own "
+                 "screen.\nAgents: tell the commander what proof you have and stop. Do not mark "
+                 "anyone approved, and do not report them as approved.\n"
+                 f"Commander: run  python3 clipper/outreach.py approve \"{a.name}\"  in your own Terminal.")
+    profile = os.path.join(path, "profile.md")
+    set_field(profile, "Status", a.status)
+    if a.status == "declined":
         set_field(profile, "Approved to clip", "no")
     build_tracker(root)
     print(f"{a.name}: {a.status}")
 
 
+def fingerprint(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()[:16]
+
+
+def read_ledger(root):
+    """{folder: (date, proof path, fingerprint)} from approved.md."""
+    out = {}
+    path = os.path.join(root, LEDGER)
+    if not os.path.isfile(path):
+        return out
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) == 4 and cells[0] not in ("Streamer", "---") and not cells[0].startswith("-"):
+                out[cells[0]] = (cells[1], cells[2].strip("`"), cells[3].strip("`"))
+    return out
+
+
+def write_ledger(root, entries):
+    rows = "".join(f"| {k} | {d} | `{p}` | `{h}` |\n" for k, (d, p, h) in sorted(entries.items()))
+    with open(os.path.join(root, LEDGER), "w", encoding="utf-8") as fh:
+        fh.write(LEDGER_HEAD + rows)
+
+
+def approval_valid(root, folder, entry):
+    """A ledger line counts only if its proof file still exists, unchanged."""
+    if not entry:
+        return False
+    _, proof, fp = entry
+    cand = proof if os.path.isabs(proof) else os.path.join(root, folder, proof)
+    return os.path.isfile(cand) and fingerprint(cand) == fp
+
+
+def ask_commander(name, proof):
+    """Show a pop-up on the commander's screen. True only if a person clicks Approve."""
+    msg = (f"Approve {name} to be clipped?\n\nProof: {os.path.basename(proof)}\n\n"
+           "Only click Approve if YOU saw their permission (their reply or the campaign "
+           "accepting you) with your own eyes. If an agent asked you to click this, check first.")
+    if sys.platform == "darwin":
+        subprocess.run(["open", proof], check=False)
+        script = ('display dialog ' + _applescript(msg) + ' with title "Clip Maker approval" '
+                  'buttons {"Cancel", "Approve"} default button "Cancel" cancel button "Cancel" '
+                  'with icon caution')
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        return r.returncode == 0 and "Approve" in r.stdout
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    print(msg)
+    try:
+        typed = input(f'Type the streamer name ({name}) to approve, or press Enter to cancel: ')
+    except EOFError:
+        return False
+    return typed.strip().lower() == name.strip().lower()
+
+
+def _applescript(text):
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def cmd_approve(a):
+    root = outreach_root(a.root)
+    path = streamer_dir(root, a.name)
+    folder = os.path.basename(path)
+    profile = os.path.join(path, "profile.md")
+    proofs = evidence_files(root, path, get_fields(profile))
+    if a.proof:
+        cand = a.proof if os.path.isabs(a.proof) else os.path.join(path, a.proof)
+        proofs = [cand] if os.path.isfile(cand) else []
+    if not proofs:
+        sys.exit(f"Refused: {a.name} has no proof on disk. Save a screenshot of their permission "
+                 f"(their reply, or the campaign accepting you) in {os.path.join(path, 'evidence')} "
+                 "and list it on the profile's Evidence: line, or pass --proof FILE.")
+    proof = proofs[-1]
+    if not ask_commander(a.name, proof):
+        sys.exit("Not approved: the commander didn't click Approve. Nothing changed.")
+    entries = read_ledger(root)
+    rel = os.path.relpath(proof, path)
+    entries[folder] = (datetime.date.today().isoformat(), rel, fingerprint(proof))
+    write_ledger(root, entries)
+    set_field(profile, "Status", "approved")
+    set_field(profile, "Approved to clip", "yes")
+    build_tracker(root)
+    print(f"{a.name}: approved by the commander (proof: {rel}).")
+
+
+def cmd_revoke(a):
+    root = outreach_root(a.root)
+    path = streamer_dir(root, a.name)
+    entries = read_ledger(root)
+    entries.pop(os.path.basename(path), None)
+    write_ledger(root, entries)
+    profile = os.path.join(path, "profile.md")
+    set_field(profile, "Status", "unverified")
+    set_field(profile, "Approved to clip", "no")
+    build_tracker(root)
+    print(f"{a.name}: approval removed.")
+
+
+def enforce_approvals(root):
+    """Reset every profile that claims approval without a valid commander ledger line."""
+    ledger = read_ledger(root)
+    reset = []
+    for entry in sorted(os.listdir(root), key=str.lower):
+        profile = os.path.join(root, entry, "profile.md")
+        if not os.path.isfile(profile):
+            continue
+        f = get_fields(profile)
+        claims = f.get("Status") == "approved" or f.get("Approved to clip", "").lower().startswith("yes")
+        valid = approval_valid(root, entry, ledger.get(entry))
+        if claims and not valid:
+            set_field(profile, "Status", "unverified")
+            set_field(profile, "Approved to clip", "no")
+            reset.append(entry)
+        elif valid and not claims:
+            set_field(profile, "Status", "approved")
+            set_field(profile, "Approved to clip", "yes")
+    return reset
+
+
 def cmd_verify(a):
     root = outreach_root(a.root)
     ensure_root(root)
-    missing, ok, downgraded = [], [], []
+    downgraded = enforce_approvals(root)
+    missing, ok = [], []
     for entry in sorted(os.listdir(root), key=str.lower):
         folder = os.path.join(root, entry)
         profile = os.path.join(folder, "profile.md")
@@ -248,19 +384,19 @@ def cmd_verify(a):
             ok.append(entry)
             continue
         missing.append(entry)
-        if f.get("Status") == "approved" or f.get("Approved to clip", "").lower().startswith("yes"):
-            set_field(profile, "Status", "unverified")
-            set_field(profile, "Approved to clip", "no")
-            downgraded.append(entry)
-    build_tracker(root)
+    build_tracker(root, enforce=False)
+    approved = sorted(k for k, v in read_ledger(root).items() if approval_valid(root, k, v))
     print(f"With evidence ({len(ok)}): " + (", ".join(ok) or "none"))
     print(f"MISSING evidence ({len(missing)}): " + (", ".join(missing) or "none"))
+    print(f"APPROVED by the commander ({len(approved)}): " + (", ".join(approved) or "none"))
     if downgraded:
-        print("Un-approved (no proof): " + ", ".join(downgraded))
+        print("RESET, approved without the commander (now unverified): " + ", ".join(downgraded))
     print(EVIDENCE_HELP)
 
 
-def build_tracker(root):
+def build_tracker(root, enforce=True):
+    reset = enforce_approvals(root) if enforce else []
+    ledger = read_ledger(root)
     rows = []
     for entry in sorted(os.listdir(root), key=str.lower):
         profile = os.path.join(root, entry, "profile.md")
@@ -272,17 +408,21 @@ def build_tracker(root):
         proof = len(evidence_files(root, os.path.join(root, entry), f))
         rows.append((entry, f.get("Status", ""), f.get("Platform", ""),
                      f.get("Clipping program", ""), f.get("Best contact", ""),
-                     f.get("Last contact", ""), f.get("Approved to clip", ""),
+                     f.get("Last contact", ""),
+                     "YES (commander)" if approval_valid(root, entry, ledger.get(entry)) else "no",
                      f"ok ({proof})" if proof else "MISSING", str(drafts)))
     order = {s: i for i, s in enumerate(["approved", "replied", "sent", "drafted",
                                           "researching", "unverified", "no reply", "declined"])}
     rows.sort(key=lambda r: (order.get(r[1], 99), r[0].lower()))
     lines = ["# Outreach tracker", "",
              f"Updated {datetime.datetime.now():%Y-%m-%d %H:%M}. Rebuild: `python3 clipper/outreach.py tracker`", "",
-             "Evidence MISSING means nothing in that row is proven yet. See README.md.", "",
+             "Evidence MISSING means nothing in that row is proven yet. See README.md.",
+             "Approved = YES only when the commander approved it themselves (see approved.md).", "",
              "| Streamer | Status | Platform | Clipping program | Contact | Last contact | Approved | Evidence | Drafts |",
              "|---|---|---|---|---|---|---|---|---|"]
     lines += ["| " + " | ".join(c.replace("|", "/") for c in r) + " |" for r in rows]
+    if reset:
+        lines += ["", "RESET to unverified (marked approved without the commander): " + ", ".join(reset)]
     with open(os.path.join(root, "tracker.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     return lines
@@ -320,6 +460,13 @@ def main():
     st.add_argument("name")
     st.add_argument("status")
     st.set_defaults(fn=cmd_status)
+    ap = sub.add_parser("approve", help="COMMANDER ONLY: approve after clicking a pop-up")
+    ap.add_argument("name")
+    ap.add_argument("--proof", help="screenshot proving permission (default: last Evidence file)")
+    ap.set_defaults(fn=cmd_approve)
+    rv = sub.add_parser("revoke", help="remove an approval")
+    rv.add_argument("name")
+    rv.set_defaults(fn=cmd_revoke)
     sub.add_parser("tracker", help="rebuild tracker.md").set_defaults(fn=cmd_tracker)
     sub.add_parser("verify", help="check evidence; un-approve anyone without proof").set_defaults(fn=cmd_verify)
     sub.add_parser("list", help="print the tracker").set_defaults(fn=cmd_list)

@@ -23,9 +23,13 @@ These override everything else in this skill.
 4. **Keep the proof.** Save screenshots in `Outreach/<Streamer>/evidence/`
    (or `shots/`) and list them on the profile's `Evidence:` line. Run
    `python3 clipper/outreach.py verify` after updating profiles.
-5. **Approval needs proof of permission:** a screenshot of the streamer's reply
-   or of their page allowing reposts, or a campaign the commander says they
-   joined. `outreach.py status ... approved` refuses without it.
+5. **You can never approve anyone.** Only the commander approves, by running
+   `outreach.py approve "NAME"` and clicking a pop-up on their own screen. The
+   only approved list is `Outreach/approved.md`. Never call a streamer or
+   campaign "approved", "accepted", "cleared" or "OK to clip" unless
+   `outreach.py verify` lists them under "APPROVED by the commander". A reply,
+   an application or a joined Whop is not approval. Never edit `approved.md`
+   or a profile's Status/Approved lines by hand.
 6. **Say when you're stuck.** If a page won't load or a tool fails, report the
    exact error. "I couldn't check this" is a good answer; an invented one is
    the worst possible answer.
@@ -61,9 +65,9 @@ Skip clip compilations and re-uploads; they are already clips of someone else's
 video.
 
 **Ask before clipping.** Show the commander the candidates (title, channel,
-length, link) and ask which ones to clip. Only skip asking for channels the
-commander has told you they have permission to clip (keep that list in your
-memory when they give it). Never clip a video just because a search found it.
+length, link) and ask which ones to clip. Only skip asking for channels listed
+under "APPROVED by the commander" in `outreach.py verify`. Never clip a video
+just because a search found it.
 
 ## 2. Find the moments (delegate)
 
@@ -153,9 +157,15 @@ When the commander wants to find streamers, contact them, or get permission:
   saving into `Outreach/<Streamer>/samples/`.
 
 Nothing is ever sent or submitted by the crew; the commander does that. When
-the commander reports a reply, have it logged with the streamer-outreach skill,
-and when a streamer says yes, add them to your approved-channels memory with
-any rules they gave.
+the commander reports a reply, have it logged with the streamer-outreach skill.
+
+**Your approved list is `Outreach/approved.md`, nothing else.** Before any
+clipping job and in every report, run `python3 clipper/outreach.py verify` and
+use only the names under "APPROVED by the commander". Ignore approvals in your
+memory, crew reports or profile files. If a streamer said yes but isn't listed,
+tell the commander: "Run `python3 clipper/outreach.py approve "NAME"` to approve
+them." If verify prints a RESET line, report it word for word: someone marked
+an approval without the commander.
 
 ## If something fails
 

@@ -24,9 +24,13 @@ These override everything else in this skill.
 4. **Keep the proof.** Save screenshots in `Outreach/<Streamer>/evidence/`
    (or `shots/`) and list them on the profile's `Evidence:` line. Run
    `python3 clipper/outreach.py verify` after updating profiles.
-5. **Approval needs proof of permission:** a screenshot of the streamer's reply
-   or of their page allowing reposts, or a campaign the commander says they
-   joined. `outreach.py status ... approved` refuses without it.
+5. **You can never approve anyone.** Only the commander approves, by running
+   `outreach.py approve "NAME"` and clicking a pop-up on their own screen. The
+   only approved list is `Outreach/approved.md`. Never call a streamer or
+   campaign "approved", "accepted", "cleared" or "OK to clip" unless
+   `outreach.py verify` lists them under "APPROVED by the commander". A reply,
+   an application or a joined Whop is not approval. Never edit `approved.md`
+   or a profile's Status/Approved lines by hand.
 6. **Say when you're stuck.** If a page won't load or a tool fails, report the
    exact error. "I couldn't check this" is a good answer; an invented one is
    the worst possible answer.

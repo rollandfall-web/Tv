@@ -425,16 +425,75 @@ def crop_filter(src_w, src_h, aspect="9:16", x=0.5, y=0.5, zoom=1.0):
             (out_w, out_h))
 
 
+def face_rect(src_w, src_h, face, panel_ratio):
+    """The part of the picture shown in the facecam panel.
+
+    face: {"x","y","w","h"} as fractions of the source (the box around the
+    streamer's camera). The box is widened or heightened around its centre to
+    fit the panel's shape, so nothing is squashed, then kept inside the picture.
+    """
+    clamp = lambda v, lo, hi: max(lo, min(hi, v))
+    fw = clamp(float(face.get("w", 0.3)), 0.02, 1) * src_w
+    fh = clamp(float(face.get("h", 0.3)), 0.02, 1) * src_h
+    cx = (clamp(float(face.get("x", 0.7)), 0, 1) * src_w) + fw / 2
+    cy = (clamp(float(face.get("y", 0)), 0, 1) * src_h) + fh / 2
+    if fw / fh > panel_ratio:
+        fh = fw / panel_ratio
+    else:
+        fw = fh * panel_ratio
+    if fw > src_w:
+        fw, fh = src_w, src_w / panel_ratio
+    if fh > src_h:
+        fh, fw = src_h, src_h * panel_ratio
+    fw, fh = max(2, int(fw) // 2 * 2), max(2, int(fh) // 2 * 2)
+    px = int(clamp(cx - fw / 2, 0, src_w - fw))
+    py = int(clamp(cy - fh / 2, 0, src_h - fh))
+    return fw, fh, px, py
+
+
+def split_filter(src_w, src_h, aspect="9:16", face=None, split=0.4, x=0.5, y=0.5, zoom=1.0):
+    """Facecam on top, gameplay below: the usual layout for stream Shorts.
+
+    split: share of the output height the facecam panel takes (0.2 to 0.6).
+    x, y, zoom: framing of the gameplay panel, as in crop_filter.
+    """
+    out_w, out_h = ASPECTS.get(aspect, ASPECTS["9:16"])
+    split = max(0.2, min(0.6, float(split)))
+    top_h = int(out_h * split) // 2 * 2
+    bot_h = out_h - top_h
+    fw, fh, fx, fy = face_rect(src_w, src_h, face or {}, out_w / top_h)
+    ratio = out_w / bot_h
+    zoom = max(1.0, min(4.0, float(zoom)))
+    cw = min(src_w, src_h * ratio) / zoom
+    ch = cw / ratio
+    cw, ch = max(2, int(cw) // 2 * 2), max(2, int(ch) // 2 * 2)
+    clamp = lambda v: max(0.0, min(1.0, float(v)))
+    gx, gy = round((src_w - cw) * clamp(x)), round((src_h - ch) * clamp(y))
+    graph = (f"split=2[cam][game];"
+             f"[cam]crop={fw}:{fh}:{fx}:{fy},scale={out_w}:{top_h}:flags=lanczos[top];"
+             f"[game]crop={cw}:{ch}:{gx}:{gy},scale={out_w}:{bot_h}:flags=lanczos[bottom];"
+             f"[top][bottom]vstack,setsar=1")
+    return graph, (out_w, out_h)
+
+
 def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold",
             lines=None, crop=None, on_progress=None, credit=None, headline=None, volume=100):
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
-    crop: optional {"aspect": "9:16", "x": 0.5, "y": 0.5, "zoom": 1} framing.
+    crop: optional {"aspect": "9:16", "x": 0.5, "y": 0.5, "zoom": 1} framing. With a
+          "face" box ({"x","y","w","h"}, fractions of the source) the clip is split:
+          facecam on top ("split" = its share of the height), gameplay below.
     """
     if kind in ("mp4", "vertical"):
         filters = []
-        if crop:
+        if crop and crop.get("face") and crop.get("aspect", "9:16") != "16:9":
+            sw, sh = video_size(raw, ffmpeg)
+            f, size = split_filter(sw, sh, crop.get("aspect", "9:16"), crop["face"],
+                                   crop.get("split", 0.4), crop.get("x", 0.5),
+                                   crop.get("y", 0.5), crop.get("zoom", 1.0))
+            filters.append(f)
+        elif crop:
             sw, sh = video_size(raw, ffmpeg)
             f, size = crop_filter(sw, sh, crop.get("aspect", "9:16"), crop.get("x", 0.5),
                                   crop.get("y", 0.5), crop.get("zoom", 1.0))
@@ -479,7 +538,7 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
 
 def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
                add_captions=False, caption_style="bold", transcribe="auto", credit=None,
-               headline=None, volume=100):
+               headline=None, volume=100, crop=None):
     ffmpeg = find_ffmpeg()
     os.makedirs(outdir, exist_ok=True)
     base = safe_name(name or video_title(source))
@@ -526,7 +585,7 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
             if add_captions and (use_speech or words) and not clip_words:
                 print("    (no speech in this clip, so no captions)")
             convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, clip_words, caption_style,
-                    credit=credit, headline=headline, volume=volume)
+                    crop=crop, credit=credit, headline=headline, volume=volume)
             print(f"    saved {dest}")
             made.append(dest)
     return made
@@ -668,9 +727,28 @@ def main():
     cap.add_argument("--transcribe", action="store_true",
                      help="write captions with speech-to-text on this computer, "
                           "even if YouTube has captions (needs faster-whisper)")
+    lay = p.add_argument_group("facecam layout (with --vertical)")
+    lay.add_argument("--face", metavar="X,Y,W,H",
+                     help="split the Short: streamer's camera on top, game below. The camera's "
+                          "box in the original video, in percent: left,top,width,height. "
+                          'e.g. "75,0,25,30" = top-right corner')
+    lay.add_argument("--split", type=float, default=40, metavar="PCT",
+                     help="how much of the height the camera takes, 20-60 (default: 40)")
     cap.add_argument("--caption-style", choices=("bold", "clean"), default="bold",
                      help="bold = big yellow-highlight words (default); clean = smaller, sentence case")
     a = p.parse_args()
+    crop = None
+    if a.face:
+        try:
+            fx, fy, fw, fh = [float(v) / 100 for v in a.face.replace(" ", "").split(",")]
+            if not (0 <= fx < 1 and 0 <= fy < 1 and 0 < fw <= 1 and 0 < fh <= 1):
+                raise ValueError
+        except ValueError:
+            p.error('--face needs four percentages: left,top,width,height, e.g. "75,0,25,30"')
+        if not a.vertical:
+            p.error("--face works with --vertical")
+        crop = {"aspect": "9:16", "face": {"x": fx, "y": fy, "w": fw, "h": fh},
+                "split": a.split / 100}
     global BROWSER
     BROWSER = a.browser
 
@@ -708,7 +786,7 @@ def main():
     made = make_clips(source, clips, kind, a.out, a.name or title, a.quality,
                       a.gif_width, a.gif_fps, a.captions, a.caption_style,
                       "always" if a.transcribe else "auto", a.credit, a.headline,
-                      0 if a.mute else a.volume)
+                      0 if a.mute else a.volume, crop)
     print(f"\nDone. {len(made)} clip(s) saved in: {os.path.abspath(a.out)}")
 
 

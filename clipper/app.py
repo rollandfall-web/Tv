@@ -538,6 +538,10 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 .frame{position:relative;background:#000;border-radius:12px;overflow:hidden;width:100%;touch-action:none}
 .frame video{position:absolute;max-width:none;object-fit:fill}
 .drag{position:absolute;inset:0;cursor:grab}
+.splitcv{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none}
+.frame.split .splitcv{display:block}
+.frame.split video{opacity:0}
+#faceCv{display:block;width:100%;border-radius:8px;background:#000;cursor:move;touch-action:none;margin:6px 0}
 .drag:active{cursor:grabbing}
 .cap{position:absolute;left:6%;right:6%;text-align:center;pointer-events:none;line-height:1.15;transform-origin:50% 100%}
 .cap.movable{pointer-events:auto;cursor:move;z-index:3;touch-action:none}
@@ -642,11 +646,18 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
         </div>
         <div class="stage"><div id="frame" class="frame">
           <video id="vid" playsinline preload="auto"></video>
+          <canvas id="splitCv" class="splitcv"></canvas>
           <div id="cap" class="cap"></div>
           <div id="creditPrev" class="credit"></div>
           <div id="headPrev" class="headline"></div>
           <div id="drag" class="drag" title="Drag to move the picture. Click to play or pause."></div>
         </div></div>
+        <div class="row" id="splitRow" style="margin:8px 0 2px"><label class="chk"><input id="splitOn" type="checkbox"> Facecam on top, game below</label></div>
+        <div id="facePanel" class="hidden">
+          <p class="hint" style="margin:2px 0">Drag the box onto the streamer's camera. Drag its corner to resize. The game part below still moves with the drag and Zoom.</p>
+          <canvas id="faceCv"></canvas>
+          <div class="ctl"><label>Facecam height</label><input id="splitPct" type="range" min="20" max="60" step="1" value="40"><output></output></div>
+        </div>
         <div class="ctl"><label>Zoom</label><input id="zoom" type="range" min="1" max="3" step="0.05" value="1"><output></output></div>
         <div class="row"><button class="small" id="centerBtn">Center</button><span class="hint" style="margin:0">Drag the video to choose what's in frame.</span></div>
 
@@ -735,7 +746,8 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 const $ = s => document.querySelector(s);
 const vid = () => $("#vid");
 const S = {info:null, title:"", clip:null, prep:null, aspect:"9:16", style:{}, lines:[], dims:[1280,720],
-           crop:{x:0.5, y:0.5, zoom:1}, cut:[0,0]};
+           crop:{x:0.5, y:0.5, zoom:1}, cut:[0,0], splitOn:false, split:0.4,
+           face:{x:0.72, y:0.02, w:0.26, h:0.32}};
 const STYLE_KEYS = ["font","size","position","x","animation","color","highlight","outline","outline_color","text_opacity","box_color","box_opacity","words_per_line"];
 const CHECK_KEYS = ["bold","uppercase","shadow","box"];
 const RATIO = {"9:16":9/16, "4:5":4/5, "1:1":1, "16:9":16/9};
@@ -872,8 +884,10 @@ function frameSize(){
   if (h > maxH) { h = maxH; w = h * r; }
   return [w, h];
 }
+const splitting = () => S.splitOn && S.aspect !== "16:9";
+const gameRatio = () => splitting() ? RATIO[S.aspect] / (1 - S.split) : RATIO[S.aspect];
 function cropBox(){
-  const [sw, sh] = S.dims, r = RATIO[S.aspect];
+  const [sw, sh] = S.dims, r = gameRatio();
   const cw = Math.min(sw, sh * r) / S.crop.zoom; return [cw, cw / r];
 }
 function layout(){
@@ -882,8 +896,72 @@ function layout(){
   const [sw, sh] = S.dims, [cw, ch] = cropBox(), k = w / cw, v = vid();
   v.style.width = sw * k + "px"; v.style.height = sh * k + "px";
   v.style.left = -(sw - cw) * S.crop.x * k + "px"; v.style.top = -(sh - ch) * S.crop.y * k + "px";
-  renderCap();
+  F.classList.toggle("split", splitting());
+  $("#splitRow").classList.toggle("hidden", S.aspect === "16:9");
+  $("#facePanel").classList.toggle("hidden", !splitting());
+  drawSplit(); drawFacePicker(); renderCap();
 }
+// Same rule as the final render (clip.py face_rect): grow the box to the panel's shape.
+function faceRect(panelRatio){
+  const [sw, sh] = S.dims, f = S.face, cl = (v, a, b) => Math.max(a, Math.min(b, v));
+  let fw = cl(f.w, 0.02, 1) * sw, fh = cl(f.h, 0.02, 1) * sh;
+  const cx = cl(f.x, 0, 1) * sw + fw / 2, cy = cl(f.y, 0, 1) * sh + fh / 2;
+  if (fw / fh > panelRatio) fh = fw / panelRatio; else fw = fh * panelRatio;
+  if (fw > sw) { fw = sw; fh = sw / panelRatio; }
+  if (fh > sh) { fh = sh; fw = sh * panelRatio; }
+  return [cl(cx - fw / 2, 0, sw - fw), cl(cy - fh / 2, 0, sh - fh), fw, fh];
+}
+function drawSplit(){
+  if (!splitting() || !S.prep) return;
+  const cv = $("#splitCv"), v = vid(), F = $("#frame"), dpr = window.devicePixelRatio || 1;
+  const W = F.clientWidth, H = F.clientHeight;
+  if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  if (!v.videoWidth) return;
+  const g = cv.getContext("2d"), [sw, sh] = S.dims, kx = v.videoWidth / sw, ky = v.videoHeight / sh;
+  const topH = Math.round(cv.height * S.split);
+  const [fx, fy, fw, fh] = faceRect(cv.width / topH);
+  g.drawImage(v, fx * kx, fy * ky, fw * kx, fh * ky, 0, 0, cv.width, topH);
+  const [cw, ch] = cropBox(), gx = (sw - cw) * S.crop.x, gy = (sh - ch) * S.crop.y;
+  g.drawImage(v, gx * kx, gy * ky, cw * kx, ch * ky, 0, topH, cv.width, cv.height - topH);
+}
+function drawFacePicker(){
+  if (!splitting() || !S.prep) return;
+  const cv = $("#faceCv"), v = vid(), [sw, sh] = S.dims, dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || 300, H = W * sh / sw;
+  if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + "px"; }
+  const g = cv.getContext("2d"), X = cv.width, Y = cv.height;
+  if (v.videoWidth) g.drawImage(v, 0, 0, X, Y); else { g.fillStyle = "#000"; g.fillRect(0, 0, X, Y); }
+  const f = S.face, bx = f.x * X, by = f.y * Y, bw = f.w * X, bh = f.h * Y;
+  g.fillStyle = "rgba(0,0,0,.45)";
+  g.fillRect(0, 0, X, by); g.fillRect(0, by + bh, X, Y - by - bh); g.fillRect(0, by, bx, bh); g.fillRect(bx + bw, by, X - bx - bw, bh);
+  g.strokeStyle = "#ffe000"; g.lineWidth = 2 * dpr; g.strokeRect(bx, by, bw, bh);
+  g.fillStyle = "#ffe000"; g.fillRect(bx + bw - 7 * dpr, by + bh - 7 * dpr, 14 * dpr, 14 * dpr);
+}
+vid().addEventListener("seeked", drawFacePicker);
+vid().addEventListener("loadeddata", () => { drawFacePicker(); drawSplit(); });
+$("#splitOn").onchange = () => {
+  S.splitOn = $("#splitOn").checked; store.set("splitOn", S.splitOn);
+  S.crop.y = 0.5; layout();
+};
+$("#splitPct").oninput = () => { S.split = +$("#splitPct").value / 100; store.set("split", S.split); showOutputs(); layout(); };
+(function(){
+  const cv = $("#faceCv"); let d = null;
+  cv.addEventListener("pointerdown", e => {
+    e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    const r = cv.getBoundingClientRect(), px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height, f = S.face;
+    const corner = Math.abs(px - (f.x + f.w)) < 0.04 && Math.abs(py - (f.y + f.h)) < 0.06;
+    d = {px, py, f:{...f}, mode: corner ? "size" : "move", r};
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!d) return;
+    const px = (e.clientX - d.r.left) / d.r.width, py = (e.clientY - d.r.top) / d.r.height, f = d.f, cl = (v, a, b) => Math.max(a, Math.min(b, v));
+    if (d.mode === "move") { S.face.x = cl(f.x + px - d.px, 0, 1 - f.w); S.face.y = cl(f.y + py - d.py, 0, 1 - f.h); }
+    else { S.face.w = cl(f.w + px - d.px, 0.05, 1 - f.x); S.face.h = cl(f.h + py - d.py, 0.05, 1 - f.y); }
+    drawFacePicker(); drawSplit();
+  });
+  const end = () => { if (d) store.set("face", S.face); d = null; };
+  cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+})();
 window.addEventListener("resize", () => { if (S.prep) layout(); });
 $("#aspSeg").onclick = e => {
   const b = e.target.closest("button"); if (!b || b.dataset.a === S.aspect) return;
@@ -934,6 +1012,7 @@ document.querySelectorAll("[data-set]").forEach(b => b.onclick = () => { S.cut[b
     if (!v.paused && v.currentTime >= S.cut[1]) { v.pause(); v.currentTime = S.cut[1]; }
     $("#seek").value = v.currentTime; $("#tc").textContent = fmtT1(S.prep.sec_start + v.currentTime);
     $("#playBtn").textContent = v.paused ? "▶" : "❚❚";
+    drawSplit(); if (!v.paused) drawFacePicker();
     renderCap();
   }
   requestAnimationFrame(loop);
@@ -1107,7 +1186,7 @@ $("#makeBtn").onclick = async () => {
   try {
     const r = await runJob("/api/make", {url:$("#url").value.trim(), browser:$("#browser").value,
       sec_start:S.prep.sec_start, sec_end:S.prep.sec_end, cut_in:S.cut[0], cut_out:S.cut[1],
-      title:S.title || S.clip.title || "", aspect:S.aspect, crop:S.crop,
+      title:S.title || S.clip.title || "", aspect:S.aspect, crop: splitting() ? {...S.crop, face:S.face, split:S.split} : S.crop,
       captions:$("#capOn").checked, words, lines, style:S.style, credit:$("#credit").value.trim(),
       headline:$("#headline").value.trim(), volume:+$("#volume").value}, $("#makeStatus"));
     $("#result").innerHTML = `<video src="${r.file}" controls playsinline></video><div class="hint">Saved as <b>${escapeHtml(r.name)}</b> in ${escapeHtml(S.info.out_dir)}</div>`;
@@ -1141,6 +1220,9 @@ const READY = (async () => {
   if (S.info.mac) $("#browser").value = "chrome";
   showOutDir();
   $("#credit").value = store.get("credit", "");
+  S.splitOn = !!store.get("splitOn", false); $("#splitOn").checked = S.splitOn;
+  S.split = +store.get("split", 0.4) || 0.4; $("#splitPct").value = Math.round(S.split * 100);
+  const sf = store.get("face", null); if (sf && sf.w > 0 && sf.h > 0) S.face = sf;
   $("#smartLine").textContent = {
     claude:"Smart picks: Claude reads the transcript.",
     local:"Smart picks: the free local AI (Ollama) reads the transcript.",

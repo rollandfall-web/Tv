@@ -143,7 +143,9 @@ def loudness_curve(media, ffmpeg):
 
 def download_audio(source, ytdlp, ffmpeg, workdir, progress=None):
     out = os.path.join(workdir, "audio.%(ext)s")
+    # Streams (Twitch, Kick) come in thousands of small pieces: fetch 8 at once.
     cmd = ytdlp + ["--no-playlist", "--no-warnings", "--newline", "-f", "ba/b",
+                   "--concurrent-fragments", "8",
                    "--ffmpeg-location", ffmpeg, "-o", out, source]
     if progress:
         import clip

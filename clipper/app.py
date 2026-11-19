@@ -97,6 +97,21 @@ os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
+def clean_cache(days=2):
+    """Delete downloaded parts older than a few days so the disk doesn't fill up."""
+    cutoff = time.time() - days * 86400
+    for name in os.listdir(CACHE_DIR):
+        folder = os.path.join(CACHE_DIR, name)
+        try:
+            if os.path.isdir(folder) and os.path.getmtime(folder) < cutoff:
+                shutil.rmtree(folder, ignore_errors=True)
+        except OSError:
+            pass
+
+
+clean_cache()
+
+
 def set_out_dir(path):
     """Change where clips are saved (remembered next to the app)."""
     global OUT_DIR

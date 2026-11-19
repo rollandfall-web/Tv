@@ -365,11 +365,16 @@ def fetch_section(source, start, end, quality, workdir, ffmpeg, on_progress=None
            f"b[height<={quality}][vcodec^=avc1]/"
            f"bv*[height<={quality}][ext=mp4]+ba[ext=m4a]/"
            f"bv*[height<={quality}]+ba/b[height<={quality}]/b")
+    # Cutting at exact times makes yt-dlp re-encode the section, by default at
+    # x264's slow "medium" setting. Every clip is encoded again later anyway, so
+    # this pass only needs to be fast and near-lossless.
+    fast = "-c:v libx264 -preset superfast -crf 18 -c:a aac -b:a 192k"
     cmd = ytdlp_cmd() + [
         "--no-playlist", "--quiet", "--no-warnings", "--progress",
         "-f", fmt,
         "--download-sections", f"*{fmt_time(start)}-{fmt_time(end)}",
         "--force-keyframes-at-cuts",
+        "--concurrent-fragments", "8",
         "--merge-output-format", "mp4",
         "--ffmpeg-location", ffmpeg,
         "-o", os.path.join(workdir, f"dl_{int(start * 1000)}.%(ext)s"),
@@ -379,12 +384,12 @@ def fetch_section(source, start, end, quality, workdir, ffmpeg, on_progress=None
         # yt-dlp cuts sections with ffmpeg; ask ffmpeg to report its progress.
         try:
             run_progress(cmd[:-1] + ["--newline", "--downloader-args",
-                                     "ffmpeg:-progress pipe:2 -nostats", source],
+                                     f"ffmpeg_o:{fast} -progress pipe:2 -nostats", source],
                          on_progress, end - start)
         except (RuntimeError, SystemExit):
             run(cmd, quiet=False)          # retry as a plain download (real errors show here)
     else:
-        run(cmd, quiet=False)
+        run(cmd[:-1] + ["--downloader-args", f"ffmpeg_o:{fast}", source], quiet=False)
     files = [f for f in os.listdir(workdir) if f.startswith(f"dl_{int(start * 1000)}.")
              and not f.endswith((".part", ".ytdl", ".temp"))]
     if not files:

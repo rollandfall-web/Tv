@@ -10,11 +10,13 @@ Signals, best first:
 Each found clip gets a score from 0 to 100 and a short reason.
 """
 import glob
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 
 CLAUDE_MODEL = "claude-opus-5-5"
 
@@ -139,6 +141,49 @@ def loudness_curve(media, ffmpeg):
     for i, v in enumerate(order):
         rank.setdefault(v, i / n)
     return [rank[v] for v in levels]
+
+
+# Loudness maps of long streams are saved here, so a 12-hour VOD is downloaded
+# and measured once; later searches (new focus, count or length) are instant.
+CURVE_CACHE = os.path.join(tempfile.gettempdir(), "clipmaker_cache", "loudness")
+LAST_MAP = {}     # source -> (curve, duration) from the latest search, for the hype map
+
+
+def _curve_key(source, is_local):
+    tag = source
+    if is_local:
+        try:
+            st = os.stat(source)
+            tag = f"{os.path.abspath(source)}|{st.st_size}|{int(st.st_mtime)}"
+        except OSError:
+            pass
+    return hashlib.sha1(tag.encode()).hexdigest()[:20]
+
+
+def cached_curve(source, is_local):
+    try:
+        with open(os.path.join(CURVE_CACHE, _curve_key(source, is_local) + ".json")) as fh:
+            curve = json.load(fh)
+        return curve if isinstance(curve, list) and len(curve) >= 5 else None
+    except (OSError, ValueError):
+        return None
+
+
+def save_curve(source, is_local, curve):
+    try:
+        os.makedirs(CURVE_CACHE, exist_ok=True)
+        with open(os.path.join(CURVE_CACHE, _curve_key(source, is_local) + ".json"), "w") as fh:
+            json.dump([round(v, 4) for v in curve], fh)
+    except OSError:
+        pass
+
+
+def hype_map(curve, points=600):
+    """The loudness curve squeezed to at most `points` values (each a max) for drawing."""
+    if not curve:
+        return []
+    step = max(1, -(-len(curve) // points))
+    return [round(max(curve[i:i + step]), 3) for i in range(0, len(curve), step)]
 
 
 def download_audio(source, ytdlp, ffmpeg, workdir, progress=None):
@@ -601,13 +646,19 @@ def _find(source, is_local, ytdlp, ffmpeg, workdir, count, min_len, max_len, use
 
     label = "Most replayed section"
     if not curve:
-        log("Measuring audio loudness...")
+        curve = cached_curve(source, is_local)
+        if curve:
+            log("Using the audio scan saved from last time (no download needed).")
+    if not curve:
+        log("Measuring audio loudness (long streams: this downloads the whole audio once)...")
         if is_local:
             media = source
         else:
             media = download_audio(source, ytdlp, ffmpeg, workdir,
                                    progress=lambda f: prog(0.3 + 0.5 * f))
         curve = loudness_curve(media, ffmpeg) if media else None
+        if curve:
+            save_curve(source, is_local, curve)
         if not curve:
             raise RuntimeError("couldn't find any signal to pick clips from "
                                "(no 'Most replayed' graph, transcript scoring, or audio).")
@@ -623,6 +674,7 @@ def _find(source, is_local, ytdlp, ffmpeg, workdir, count, min_len, max_len, use
         else:
             log(f'  Nothing said in the video matched "{focus}"; picking the best moments overall.')
             terms = set()
+    LAST_MAP[source] = (hype_map(curve), float(duration or len(curve)))
     want = count * 3 if local_ok else count
     clips = signal_clips(curve, label, duration, want, min_len, max_len, cues, words)
     for c in clips:

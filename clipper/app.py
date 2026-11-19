@@ -202,7 +202,55 @@ def job_find(job, p):
             count=int(p.get("count") or 5), min_len=float(p.get("min") or 15),
             max_len=float(p.get("max") or 60), use_ai=True, log=job.log, skip_text=fetch,
             focus=(p.get("focus") or "").strip(), progress=job.span(0, 1))
-    return {"title": title, "clips": picks}
+    m = finder.LAST_MAP.get(url)
+    return {"title": title, "clips": picks,
+            "map": m[0] if m else [], "duration": m[1] if m else 0}
+
+
+REC_DIR = os.path.join(ROOT, "Recordings")     # live streams recorded here, then clipped
+
+
+def job_record(job, p):
+    """Record a live stream from now for a few minutes, so it can be clipped like a video."""
+    use_browser(p.get("browser"))
+    url = p["url"].strip()
+    if clip.is_local_file(url):
+        raise RuntimeError("That's a file on this computer, not a live stream link.")
+    secs = max(1.0, min(60.0, float(p.get("minutes") or 5))) * 60
+    ffmpeg = clip.find_ffmpeg()
+    job.log("Finding the live stream...")
+    r = subprocess.run(clip.ytdlp_cmd() + [
+        "--no-playlist", "--no-warnings", "--print", "title", "--print", "urls",
+        "-f", "b[height<=1080]/bv*[height<=1080]+ba/b", url],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
+    out = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+    urls = [l for l in out if l.startswith("http")]
+    if r.returncode != 0 or not urls:
+        err = (r.stderr or "").strip().splitlines()
+        raise RuntimeError("Couldn't open that stream. Is it live right now? "
+                           + clip.explain(err[-1] if err else ""))
+    title = next((l for l in out if not l.startswith("http")), "live")
+    os.makedirs(REC_DIR, exist_ok=True)
+    name = f"{clip.safe_name(title)[:60]}_{time.strftime('%Y-%m-%d_%H%M')}"
+    ts, mp4 = os.path.join(REC_DIR, name + ".ts"), os.path.join(REC_DIR, name + ".mp4")
+    job.log(f"Recording {int(secs // 60)} minute(s) from now. Keep this page open...")
+    cmd = [ffmpeg, "-y"]
+    for u in urls[:2]:
+        cmd += ["-i", u]
+    cmd += ["-t", f"{secs:.0f}", "-map", "0:v:0?", "-map", ("1:a:0?" if len(urls) > 1 else "0:a:0?"),
+            "-c", "copy", "-f", "mpegts", ts]
+    try:
+        clip.run_ffmpeg(cmd, job.span(0, 0.95), secs)
+    except (RuntimeError, SystemExit):
+        if not (os.path.isfile(ts) and os.path.getsize(ts) > 0):
+            raise RuntimeError("The recording stopped before anything was saved. "
+                               "The stream may have ended or dropped; try again.")
+        job.log("The stream stopped early; keeping what was recorded.")
+    job.log("Saving the recording...")
+    clip.run([ffmpeg, "-y", "-i", ts, "-c", "copy", "-movflags", "+faststart", mp4])
+    os.remove(ts)
+    job.pct = 1.0
+    return {"path": mp4, "title": title}
 
 
 def section_key(url, start, end, quality):
@@ -507,6 +555,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"job": start_job(job_prepare, p)})
         if path == "/api/make":
             return self.send_json({"job": start_job(job_make, p)})
+        if path == "/api/record":
+            return self.send_json({"job": start_job(job_record, p)})
         if path == "/api/overlay":
             try:
                 name = save_overlay(p.get("name"), p.get("data"))
@@ -635,6 +685,22 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 .seg button small{display:block;font-weight:400;color:var(--muted);font-size:11px}
 .seg button.on{background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.15)}
 .hint{color:var(--muted);font-size:12px;margin:6px 0 0}
+.opt{border-top:1px solid var(--line);margin-top:16px;padding-top:14px}
+.opt h3,.grp h3{margin:0 0 8px}
+.lbl{display:block;font-weight:600;font-size:13px;margin-bottom:6px}
+details.grp{border:1px solid var(--line);border-radius:12px;padding:0 14px;margin-bottom:12px}
+details.grp[open]{padding-bottom:12px}
+details.grp>summary{cursor:pointer;list-style:none;padding:12px 0;display:flex;flex-direction:column;gap:2px}
+details.grp>summary::-webkit-details-marker{display:none}
+details.grp>summary b{font-size:14px}
+details.grp>summary b::before{content:"▸ ";color:var(--muted)}
+details.grp[open]>summary b::before{content:"▾ "}
+details.grp>summary span{font-size:12px;color:var(--muted);font-weight:400}
+details.more{margin-top:10px}
+details.more>summary{cursor:pointer;font-size:13px;color:var(--muted)}
+#hypeWrap{margin-bottom:14px}
+#hypeCv{display:block;width:100%;height:90px;border-radius:8px;background:var(--soft);cursor:pointer}
+.hypeAxis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
 .result video{width:100%;max-width:360px;border-radius:12px;display:block;margin:10px 0}
 .warn{background:#fff4d6;color:#6b4b00;border-radius:9px;padding:10px 12px;font-size:13px;margin-bottom:12px;white-space:pre-wrap}
 @media (prefers-color-scheme:dark){.warn{background:#3a2f12;color:#f3d98b}}
@@ -644,39 +710,58 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 <body>
 <main>
   <h1>Clip Maker</h1>
-  <p class="sub">Paste a YouTube or Twitch link, find the best moments, frame and caption them, and make your clip.</p>
+  <p class="sub">Paste a YouTube, Twitch or Kick link (or record a live stream), find the best moments, frame and caption them, and make your clip.</p>
   <div id="warn"></div>
 
   <section class="card">
     <h2>1. Video</h2>
+    <label class="lbl" for="url">Video link</label>
     <div class="row">
-      <input id="url" class="url" type="text" placeholder="https://www.youtube.com/watch?v=...">
-      <select id="browser" title="Use this browser's sign-in (needed for age-restricted videos)">
-        <option value="">No sign-in</option><option value="chrome">Chrome sign-in</option>
-        <option value="safari">Safari sign-in</option><option value="firefox">Firefox sign-in</option>
-        <option value="edge">Edge sign-in</option><option value="brave">Brave sign-in</option>
+      <input id="url" class="url" type="text" placeholder="Paste a YouTube, Twitch or Kick link">
+      <select id="browser" title="Only needed for age-restricted or sign-in-only videos">
+        <option value="">No sign-in needed</option><option value="chrome">Use my Chrome sign-in</option>
+        <option value="safari">Use my Safari sign-in</option><option value="firefox">Use my Firefox sign-in</option>
+        <option value="edge">Use my Edge sign-in</option><option value="brave">Use my Brave sign-in</option>
       </select>
     </div>
-    <div class="row" style="margin-top:10px">
-      <label>Clips <input id="count" type="number" min="1" max="15" value="5"></label>
-      <label>Length <input id="minl" type="number" min="3" value="15"> to <input id="maxl" type="number" min="5" value="60"> sec</label>
+    <p class="hint">Sign-in is only needed when a video is age-restricted, subscriber-only, or says "confirm you're not a bot". It uses the browser you're already signed into; no password is asked.</p>
+
+    <div class="opt">
+      <h3>A. Find the best moments for me</h3>
+      <div class="row">
+        <label>How many <input id="count" type="number" min="1" max="15" value="5"></label>
+        <label>Each clip <input id="minl" type="number" min="3" value="15"> to <input id="maxl" type="number" min="5" value="60"> seconds</label>
+      </div>
+      <div style="margin-top:10px">
+        <label class="lbl" for="focus">Look for (optional)</label>
+        <textarea id="focus" rows="1" placeholder="Words people say, e.g. funny, no way, chase, cops, heist"></textarea>
+        <p class="hint" id="smartLine"></p>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="chk"><input id="capDefault" type="checkbox" checked> Add captions (subtitles of what's said)</label>
+        <label class="chk" id="skipLbl"><input id="skipText" type="checkbox" checked> Skip moments that already have text on screen</label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="findBtn" class="primary">Find best moments</button></div>
+      <p class="hint">Long streams: the first search downloads the stream's audio once (a 12-hour VOD can take several minutes). Searching the same link again is instant, and you get a hype map of the whole stream to pick from.</p>
     </div>
-    <div style="margin-top:12px">
-      <label for="focus">Focus on (optional)</label>
-      <textarea id="focus" rows="1" placeholder="e.g. funny reactions, car chases, when they talk about the heist"></textarea>
-      <p class="hint" id="smartLine"></p>
+
+    <div class="opt">
+      <h3>B. Or edit an exact part</h3>
+      <div class="row">
+        <label>From <input id="ms" type="text" placeholder="1:23" style="width:84px"></label>
+        <label>to <input id="me" type="text" placeholder="1:45" style="width:84px"></label>
+        <button id="manualBtn">Edit this part</button>
+      </div>
+      <p class="hint">Times like 1:23, or 2:05:10 for hours into a long stream.</p>
     </div>
-    <div class="row" style="margin-top:10px">
-      <label class="chk"><input id="capDefault" type="checkbox" checked> Add captions</label>
-      <label class="chk" id="skipLbl"><input id="skipText" type="checkbox" checked> Skip moments with text already on screen</label>
-    </div>
-    <p class="hint">Turn off captions if the video already has subtitles burned in.</p>
-    <div class="row" style="margin-top:10px">
-      <button id="findBtn" class="primary">Find best moments</button>
-      <label>or pick the time yourself:</label>
-      <input id="ms" type="text" placeholder="1:23" style="width:76px"> to
-      <input id="me" type="text" placeholder="1:45" style="width:76px">
-      <button id="manualBtn">Edit this part</button>
+
+    <div class="opt">
+      <h3>C. Live right now? Record it</h3>
+      <div class="row">
+        <label>Record the next <input id="recMin" type="number" min="1" max="60" value="10" style="width:64px"> minutes</label>
+        <button id="recBtn">Record live</button>
+      </div>
+      <p class="hint">Records from now, not from the start of the stream. Keep this page open while it records. When it's done, the recording replaces the link above so you can use A or B on it. Twitch tip: the stream's past broadcast often appears under Videos while it's still live; use that link to clip earlier moments.</p>
     </div>
     <div id="findStatus" class="status"></div>
     <details style="margin-top:14px"><summary class="hint" style="cursor:pointer">Save clips to: <b id="outDirLbl"></b></summary>
@@ -691,6 +776,11 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 
   <section id="picksCard" class="card hidden">
     <h2>2. Best moments</h2>
+    <div id="hypeWrap" class="hidden">
+      <canvas id="hypeCv" title="Click anywhere to edit that moment"></canvas>
+      <div class="hypeAxis"><span id="hype0">0:00</span><span id="hypeMid"></span><span id="hypeEnd"></span></div>
+      <p class="hint">Hype map of the whole video: taller = louder or more replayed. Highlighted = the picks below. Click anywhere to edit 30 seconds around that spot.</p>
+    </div>
     <div id="picks"></div>
   </section>
 
@@ -714,14 +804,14 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
           <div id="headPrev" class="headline"></div>
           <div id="drag" class="drag" title="Drag to move the picture. Click to play or pause."></div>
         </div></div>
-        <div class="row" id="splitRow" style="margin:8px 0 2px"><label class="chk"><input id="splitOn" type="checkbox"> Facecam on top, game below</label></div>
+        <div class="row" id="splitRow" style="margin:8px 0 2px"><label class="chk"><input id="splitOn" type="checkbox"> Facecam on top, game below</label><span class="hint" style="margin:0">For streams with a camera: shows the streamer's face and the game together.</span></div>
         <div id="facePanel" class="hidden">
           <p class="hint" style="margin:2px 0">Drag the box onto the streamer's camera. Drag its corner to resize. The game part below still moves with the drag and Zoom.</p>
           <canvas id="faceCv"></canvas>
           <div class="ctl"><label>Facecam height</label><input id="splitPct" type="range" min="20" max="60" step="1" value="40"><output></output></div>
         </div>
         <div class="ctl"><label>Zoom</label><input id="zoom" type="range" min="1" max="3" step="0.05" value="1"><output></output></div>
-        <div class="row"><button class="small" id="centerBtn">Center</button><span class="hint" style="margin:0">Drag the video to choose what's in frame.</span></div>
+        <div class="row"><button class="small" id="centerBtn">Reset framing</button><span class="hint" style="margin:0">Drag the video to choose what's in frame; click it to play or pause.</span></div>
 
         <div class="playbar">
           <button class="small" id="playBtn">▶</button>
@@ -729,34 +819,46 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
           <span class="tc" id="tc">0:00.0</span>
         </div>
         <div class="trim">
-          <span>Start</span><span><button class="small" data-t="in" data-d="-1">−1s</button> <button class="small" data-t="in" data-d="-0.2">−.2</button> <b id="inT">0:00.0</b> <button class="small" data-t="in" data-d="0.2">+.2</button> <button class="small" data-t="in" data-d="1">+1s</button></span><button class="small" data-set="in">Set to playhead</button>
-          <span>End</span><span><button class="small" data-t="out" data-d="-1">−1s</button> <button class="small" data-t="out" data-d="-0.2">−.2</button> <b id="outT">0:00.0</b> <button class="small" data-t="out" data-d="0.2">+.2</button> <button class="small" data-t="out" data-d="1">+1s</button></span><button class="small" data-set="out">Set to playhead</button>
+          <span>Start</span><span><button class="small" data-t="in" data-d="-1">−1s</button> <button class="small" data-t="in" data-d="-0.2">−.2</button> <b id="inT">0:00.0</b> <button class="small" data-t="in" data-d="0.2">+.2</button> <button class="small" data-t="in" data-d="1">+1s</button></span><button class="small" data-set="in">Start here</button>
+          <span>End</span><span><button class="small" data-t="out" data-d="-1">−1s</button> <button class="small" data-t="out" data-d="-0.2">−.2</button> <b id="outT">0:00.0</b> <button class="small" data-t="out" data-d="0.2">+.2</button> <button class="small" data-t="out" data-d="1">+1s</button></span><button class="small" data-set="out">End here</button>
         </div>
         <div class="row" style="margin-top:8px"><button class="small" id="snapBtn">Snap to sentences</button><span class="hint" id="snapNote" style="margin:0"></span></div>
         <p class="hint">Length: <b id="lenT">0s</b>. You can move the start and end up to 10 seconds past the picked moment.</p>
       </div>
 
       <div>
-        <div class="ctl" style="grid-template-columns:140px 1fr"><label for="credit">Credit on screen</label><input id="credit" type="text" placeholder="e.g. twitch.tv/Lysium" maxlength="80"></div>
-        <p class="hint" style="margin:-2px 0 12px">Shown near the top for the whole clip. Many campaigns require the streamer's handle.</p>
-        <div class="ctl" style="grid-template-columns:140px 1fr"><label for="headline">Headline text</label><textarea id="headline" rows="2" maxlength="200" placeholder="e.g. When GTA 6 finally drops tomorrow"></textarea></div>
-        <p class="hint" style="margin:-2px 0 12px">Big text across the top for the whole clip, for edits with music and no talking. Press Enter for a new line.</p>
-        <div class="ctl"><label for="volume">Original audio</label><input id="volume" type="range" min="0" max="100" step="5" value="100"><output></output></div>
-        <p class="hint" style="margin:-2px 0 12px">0% removes the clip's own sound, ready for adding a song in TikTok or Reels. Around 20% keeps game sounds quietly under music.</p>
-        <h3 style="margin-top:4px">Overlay</h3>
-        <div class="row" style="margin-bottom:6px"><input id="ovFile" type="file" accept="image/png,image/jpeg,image/webp" style="flex:1;min-width:0"><button class="small hidden" id="ovClear">Remove</button></div>
-        <p class="hint" style="margin:-2px 0 8px">A streamer's frame, logo or watermark (a PNG with a see-through background works best). Remembered for your next clips.</p>
-        <div id="ovCtl" class="hidden">
-          <label class="chk"><input id="ovFull" type="checkbox"> Cover the whole frame (for full-size frames)</label>
-          <div class="ctl"><label>Overlay size</label><input id="ovsize" type="range" min="5" max="100" step="1" value="30"><output></output></div>
-          <div class="ctl"><label>Overlay opacity</label><input id="ov_opacity" type="range" min="10" max="100" step="5" value="100"><output></output></div>
-          <p class="hint" style="margin:-2px 0 12px">Drag the overlay on the video to move it.</p>
-        </div>
-        <label class="chk"><input id="capOn" type="checkbox" checked> Captions</label>
-        <span class="hint" style="margin-left:6px">Off if the video already has subtitles.</span>
+        <details class="grp" open>
+          <summary><b>Text on screen</b><span>Stays on screen for the whole clip</span></summary>
+          <div class="ctl" style="grid-template-columns:120px 1fr"><label for="credit">Streamer handle</label><input id="credit" type="text" placeholder="e.g. twitch.tv/Lysium" maxlength="80"></div>
+          <p class="hint" style="margin:-2px 0 10px">Small text near the top. Use it when a campaign says "include the stream handle".</p>
+          <div class="ctl" style="grid-template-columns:120px 1fr"><label for="headline">Title text</label><textarea id="headline" rows="2" maxlength="200" placeholder="e.g. When GTA 6 | finally drops"></textarea></div>
+          <p class="hint" style="margin:-2px 0 0">Big text across the top, for music edits with no talking. Enter or | starts a new line.</p>
+        </details>
 
+        <details class="grp" open>
+          <summary><b>Sound</b><span>The clip's own audio</span></summary>
+          <div class="ctl"><label for="volume">Clip sound</label><input id="volume" type="range" min="0" max="100" step="5" value="100"><output></output></div>
+          <p class="hint" style="margin:-2px 0 0">100% = normal. 0% = silent, for adding a song in TikTok or Reels (music campaigns). About 20% = game sounds quietly under a song.</p>
+        </details>
+
+        <details class="grp" id="ovGrp">
+          <summary><b>Overlay</b><span>A streamer's frame, logo or watermark, only if they require it</span></summary>
+          <div class="row" style="margin-bottom:6px"><input id="ovFile" type="file" accept="image/png,image/jpeg,image/webp" style="flex:1;min-width:0"><button class="small hidden" id="ovClear">Remove</button></div>
+          <p class="hint" style="margin:-2px 0 8px">A PNG with a see-through background works best. Remembered for your next clips; Remove takes it off.</p>
+          <div id="ovCtl" class="hidden">
+            <label class="chk"><input id="ovFull" type="checkbox"> Cover the whole frame (for full-size frames)</label>
+            <div class="ctl"><label>Size</label><input id="ovsize" type="range" min="5" max="100" step="1" value="30"><output></output></div>
+            <div class="ctl"><label>See-through</label><input id="ov_opacity" type="range" min="10" max="100" step="5" value="100"><output></output></div>
+            <p class="hint" style="margin:-2px 0 0">Drag the overlay on the video to move it. 100% = solid.</p>
+          </div>
+        </details>
+
+        <details class="grp" open>
+          <summary><b>Captions</b><span>Subtitles of what's said, timed word by word</span></summary>
+          <label class="chk"><input id="capOn" type="checkbox" checked> Show captions</label>
+          <span class="hint" style="margin-left:6px">Turn off if the video already has subtitles, or for music edits.</span>
         <div id="capPanel">
-        <h3>Words</h3>
+        <h3>The words (fix any mistakes)</h3>
         <div class="row" style="margin-bottom:8px">
           <span id="srcLbl" class="hint" style="margin:0;flex:1"></span>
           <button class="small" id="speechBtn">Transcribe speech</button>
@@ -768,15 +870,15 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
           <label style="flex:1">Wrap a word in *stars* to always highlight it. Click a time to jump there.</label>
         </div>
 
-        <h3>Style</h3>
-        <div class="row"><button class="small" data-preset="bold">Bold (yellow pop)</button><button class="small" data-preset="clean">Clean</button></div>
+        <h3>Look</h3>
+        <div class="row"><button class="small" data-preset="bold">Bold style (big, yellow word)</button><button class="small" data-preset="clean">Clean style (smaller)</button></div>
         <div class="ctl"><label>Words per line</label><input id="wpl" type="range" min="1" max="8" step="1"><output></output></div>
         <div class="ctl"><label>Font</label><select id="font">
           <option>Arial</option><option>Arial Black</option><option>Impact</option><option>Helvetica Neue</option>
           <option>Avenir Next</option><option>Futura</option><option>Verdana</option><option>Georgia</option><option>Comic Sans MS</option>
         </select><span></span></div>
         <div class="ctl"><label>Size</label><input id="size" type="range" min="1.5" max="14" step="0.1"><output></output></div>
-        <div class="ctl"><label>Position (from bottom)</label><input id="position" type="range" min="2" max="90" step="1"><output></output></div>
+        <div class="ctl"><label>Height on screen</label><input id="position" type="range" min="2" max="90" step="1"><output></output></div>
         <div class="ctl"><label>Left / right</label><input id="x" type="range" min="10" max="90" step="1"><output></output></div>
         <p class="hint" style="margin:-2px 0 8px">Or drag the captions on the video. Keep them above the bottom 20%, where TikTok puts the caption and buttons.</p>
         <div class="ctl"><label>Animation</label><select id="animation">
@@ -784,6 +886,7 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
           <option value="bounce">Bounce in</option><option value="fade">Fade in</option>
           <option value="slide">Slide up</option><option value="typewriter">Typewriter (word by word)</option>
         </select><span></span></div>
+        <details class="more"><summary>More style options (colors, outline, box)</summary>
         <div class="ctl"><label>Text color</label><input id="color" type="color"><span></span></div>
         <div class="ctl"><label>Highlight color</label><input id="highlight" type="color"><span></span></div>
         <div class="ctl"><label>Outline</label><input id="outline" type="range" min="0" max="25" step="1"><output></output></div>
@@ -795,12 +898,13 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
           <label class="chk"><input id="shadow" type="checkbox"> Shadow</label>
         </div>
 
-        <h3>Opacity</h3>
-        <div class="ctl"><label>Text opacity</label><input id="text_opacity" type="range" min="0" max="100" step="5"><output></output></div>
+        <div class="ctl"><label>Text see-through</label><input id="text_opacity" type="range" min="0" max="100" step="5"><output></output></div>
         <div class="row" style="margin:8px 0"><label class="chk"><input id="box" type="checkbox"> Background box</label></div>
         <div class="ctl"><label>Box color</label><input id="box_color" type="color"><span></span></div>
-        <div class="ctl"><label>Box opacity</label><input id="box_opacity" type="range" min="0" max="100" step="5"><output></output></div>
+        <div class="ctl"><label>Box see-through</label><input id="box_opacity" type="range" min="0" max="100" step="5"><output></output></div>
+        </details>
         </div>
+        </details>
 
         <div class="row" style="margin-top:18px">
           <button id="makeBtn" class="primary">Make clip</button>
@@ -825,8 +929,10 @@ const RATIO = {"9:16":9/16, "4:5":4/5, "1:1":1, "16:9":16/9};
 const store = {get(k, d){ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch(e){ return d; } },
                set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }};
 
-const fmtT = t => { t = Math.max(0, t || 0); const m = Math.floor(t/60), s = Math.floor(t%60); return m + ":" + String(s).padStart(2,"0"); };
-const fmtT1 = t => { t = Math.max(0, t || 0); const m = Math.floor(t/60), s = (t%60).toFixed(1); return m + ":" + s.padStart(4,"0"); };
+const fmtT = t => { t = Math.max(0, t || 0); const h = Math.floor(t/3600), m = Math.floor(t%3600/60), s = Math.floor(t%60);
+  return (h ? h + ":" + String(m).padStart(2,"0") : m) + ":" + String(s).padStart(2,"0"); };
+const fmtT1 = t => { t = Math.max(0, t || 0); const h = Math.floor(t/3600), m = Math.floor(t%3600/60), s = (t%60).toFixed(1);
+  return (h ? h + ":" + String(m).padStart(2,"0") : m) + ":" + s.padStart(4,"0"); };
 function parseT(x){ x = String(x).trim(); if(!x) return NaN; if(/^\d+(\.\d+)?$/.test(x)) return +x;
   const p = x.split(":").map(Number); if(p.some(isNaN)) return NaN; return p.reduce((a,b)=>a*60+b,0); }
 async function api(path, body){ const r = await fetch(path, body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {}); return r.json(); }
@@ -873,7 +979,7 @@ $("#findBtn").onclick = async () => {
     const r = await runJob("/api/find", {url, browser:$("#browser").value, count:$("#count").value, min:$("#minl").value,
       max:$("#maxl").value, skip_text:$("#skipText").checked && S.info.tesseract,
       focus:$("#focus").value.trim()}, $("#findStatus"));
-    S.title = r.title; showPicks(r.clips);
+    S.title = r.title; S.map = {vals:r.map || [], dur:r.duration || 0, clips:r.clips}; showPicks(r.clips); drawHype();
   } catch(e) {} finally { $("#findBtn").disabled = false; }
 };
 $("#manualBtn").onclick = () => {
@@ -881,6 +987,45 @@ $("#manualBtn").onclick = () => {
   if (!(e > s)) return status($("#findStatus"), "Type a start and end time, like 1:23 and 1:45.", "err");
   status($("#findStatus"), ""); openEditor({start:s, end:e, title:""});
 };
+// ---------------------------------------------------------------- hype map
+function drawHype(){
+  const m = S.map, wrap = $("#hypeWrap");
+  wrap.classList.toggle("hidden", !(m && m.vals.length > 10 && m.dur > 0));
+  if (wrap.classList.contains("hidden")) return;
+  const cv = $("#hypeCv"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const g = cv.getContext("2d"), X = cv.width, Y = cv.height, n = m.vals.length, bw = X / n;
+  const css = getComputedStyle(document.documentElement);
+  g.clearRect(0, 0, X, Y);
+  g.fillStyle = css.getPropertyValue("--sel").trim() || "rgba(255,61,90,.25)";
+  m.clips.forEach(c => g.fillRect(c.start / m.dur * X, 0, Math.max(2, (c.end - c.start) / m.dur * X), Y));
+  g.fillStyle = css.getPropertyValue("--muted").trim() || "#888";
+  m.vals.forEach((v, i) => { const h = Math.max(1, v * v * (Y - 4)); g.fillRect(i * bw, Y - h, Math.max(1, bw - 0.5), h); });
+  $("#hypeMid").textContent = fmtT(m.dur / 2); $("#hypeEnd").textContent = fmtT(m.dur);
+}
+window.addEventListener("resize", () => { if (S.map) drawHype(); });
+$("#hypeCv").addEventListener("mousemove", e => {
+  if (!S.map) return; const r = $("#hypeCv").getBoundingClientRect();
+  $("#hypeCv").title = "Edit around " + fmtT((e.clientX - r.left) / r.width * S.map.dur);
+});
+$("#hypeCv").addEventListener("click", e => {
+  if (!S.map) return; const r = $("#hypeCv").getBoundingClientRect();
+  const t = (e.clientX - r.left) / r.width * S.map.dur, s = Math.max(0, t - 15);
+  openEditor({start:s, end:Math.min(S.map.dur, s + 30), title:""});
+});
+
+// ---------------------------------------------------------------- live recording
+$("#recBtn").onclick = async () => {
+  const url = $("#url").value.trim(); if (!url) return $("#url").focus();
+  $("#recBtn").disabled = true; $("#findBtn").disabled = true;
+  try {
+    await READY;
+    const r = await runJob("/api/record", {url, browser:$("#browser").value, minutes:+$("#recMin").value || 10}, $("#findStatus"));
+    $("#url").value = r.path; S.title = r.title; S.map = null;
+    status($("#findStatus"), "Recorded and loaded. Now use A (find the best moments) or B (edit an exact part).");
+  } catch(e) {} finally { $("#recBtn").disabled = false; $("#findBtn").disabled = false; }
+};
+
 function showPicks(clips){
   $("#picksCard").classList.remove("hidden");
   const box = $("#picks"); box.innerHTML = "";
@@ -1000,6 +1145,7 @@ S.ov = null;   // {name, url, full, x, y, w, opacity}
 function renderOverlay(){
   const img = $("#ovPrev"), ov = S.ov;
   $("#ovCtl").classList.toggle("hidden", !ov); $("#ovClear").classList.toggle("hidden", !ov);
+  if (ov) $("#ovGrp").open = true;
   if (!ov) { img.style.display = "none"; return; }
   if (img.getAttribute("src") !== ov.url) img.src = ov.url;
   img.style.display = "block"; img.style.opacity = ov.opacity / 100;

@@ -71,6 +71,28 @@ OUT_DIR = load_settings().get("out_dir") or default_out_dir()
 if not os.path.isdir(os.path.dirname(OUT_DIR.rstrip("/\\")) or "."):
     OUT_DIR = default_out_dir()          # the saved folder's drive isn't connected
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "clipmaker_cache")
+OVERLAY_DIR = os.path.join(ROOT, "Overlays")      # images people upload for overlays
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def save_overlay(name, data_url):
+    """Store an uploaded overlay image; returns its file name in OVERLAY_DIR."""
+    import base64
+    ext = os.path.splitext(str(name or ""))[1].lower()
+    if ext not in IMAGE_TYPES:
+        raise RuntimeError("Overlays must be PNG, JPG or WebP images.")
+    try:
+        raw = base64.b64decode(str(data_url).split(",", 1)[-1], validate=False)
+    except ValueError:
+        raise RuntimeError("That image couldn't be read.")
+    if not raw or len(raw) > 20 * 1024 * 1024:
+        raise RuntimeError("The image must be under 20 MB.")
+    os.makedirs(OVERLAY_DIR, exist_ok=True)
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.splitext(os.path.basename(name))[0])[:60] or "overlay"
+    fname = base + ext
+    with open(os.path.join(OVERLAY_DIR, fname), "wb") as fh:
+        fh.write(raw)
+    return fname
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -305,9 +327,17 @@ def job_make(job, p):
             volume = int(p.get("volume", 100))
         except (TypeError, ValueError):
             volume = 100
+        overlay = None
+        ov = p.get("overlay") or {}
+        if ov.get("name"):
+            f = os.path.join(OVERLAY_DIR, os.path.basename(str(ov["name"])))
+            if os.path.isfile(f):
+                overlay = dict(ov, file=f)
+            else:
+                job.log("The overlay image is missing, so it wasn't added. Upload it again.")
         clip.convert(raw, dest, "mp4", ffmpeg, 480, 12, words, p.get("style") or "bold",
                      lines, crop, on_progress=job.span(0.35, 1.0), credit=credit,
-                     headline=headline, volume=volume)
+                     headline=headline, volume=volume, overlay=overlay)
     return {"file": "/out/" + os.path.basename(dest), "name": os.path.basename(dest)}
 
 
@@ -433,6 +463,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"status": job.status, "log": job.lines[-6:],
                                    "pct": round(job.pct, 4),
                                    "result": job.result, "error": job.error})
+        if path.startswith("/overlay/"):
+            full = self.safe_path(OVERLAY_DIR, path[len("/overlay/"):])
+            ctype = IMAGE_TYPES.get(os.path.splitext(full or "")[1].lower())
+            if not full or not ctype:
+                return self.send_error(404)
+            return self.send_file(full, ctype)
         for prefix, root in (("/media/", CACHE_DIR), ("/out/", OUT_DIR)):
             if path.startswith(prefix):
                 full = self.safe_path(root, path[len(prefix):])
@@ -456,6 +492,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"job": start_job(job_prepare, p)})
         if path == "/api/make":
             return self.send_json({"job": start_job(job_make, p)})
+        if path == "/api/overlay":
+            try:
+                name = save_overlay(p.get("name"), p.get("data"))
+            except RuntimeError as err:
+                return self.send_json({"error": str(err)}, 400)
+            return self.send_json({"name": name, "url": "/overlay/" + name})
         if path == "/api/open":
             open_folder()
             return self.send_json({"ok": True})
@@ -540,6 +582,10 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 .drag{position:absolute;inset:0;cursor:grab}
 .splitcv{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none}
 .frame.split .splitcv{display:block}
+.ovprev{position:absolute;pointer-events:none;display:none;transform:translate(-50%,-50%);z-index:2}
+.ovprev.full{left:0!important;top:0!important;width:100%!important;height:100%!important;transform:none}
+.ovprev.movable{pointer-events:auto;cursor:move;touch-action:none}
+.ovprev.movable:hover{outline:2px dashed rgba(255,255,255,.7)}
 .frame.split video{opacity:0}
 #faceCv{display:block;width:100%;border-radius:8px;background:#000;cursor:move;touch-action:none;margin:6px 0}
 .drag:active{cursor:grabbing}
@@ -647,6 +693,7 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
         <div class="stage"><div id="frame" class="frame">
           <video id="vid" playsinline preload="auto"></video>
           <canvas id="splitCv" class="splitcv"></canvas>
+          <img id="ovPrev" class="ovprev" alt="">
           <div id="cap" class="cap"></div>
           <div id="creditPrev" class="credit"></div>
           <div id="headPrev" class="headline"></div>
@@ -681,6 +728,15 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
         <p class="hint" style="margin:-2px 0 12px">Big text across the top for the whole clip, for edits with music and no talking. Press Enter for a new line.</p>
         <div class="ctl"><label for="volume">Original audio</label><input id="volume" type="range" min="0" max="100" step="5" value="100"><output></output></div>
         <p class="hint" style="margin:-2px 0 12px">0% removes the clip's own sound, ready for adding a song in TikTok or Reels. Around 20% keeps game sounds quietly under music.</p>
+        <h3 style="margin-top:4px">Overlay</h3>
+        <div class="row" style="margin-bottom:6px"><input id="ovFile" type="file" accept="image/png,image/jpeg,image/webp" style="flex:1;min-width:0"><button class="small hidden" id="ovClear">Remove</button></div>
+        <p class="hint" style="margin:-2px 0 8px">A streamer's frame, logo or watermark (a PNG with a see-through background works best). Remembered for your next clips.</p>
+        <div id="ovCtl" class="hidden">
+          <label class="chk"><input id="ovFull" type="checkbox"> Cover the whole frame (for full-size frames)</label>
+          <div class="ctl"><label>Overlay size</label><input id="ovsize" type="range" min="5" max="100" step="1" value="30"><output></output></div>
+          <div class="ctl"><label>Overlay opacity</label><input id="ov_opacity" type="range" min="10" max="100" step="5" value="100"><output></output></div>
+          <p class="hint" style="margin:-2px 0 12px">Drag the overlay on the video to move it.</p>
+        </div>
         <label class="chk"><input id="capOn" type="checkbox" checked> Captions</label>
         <span class="hint" style="margin-left:6px">Off if the video already has subtitles.</span>
 
@@ -924,6 +980,55 @@ function drawSplit(){
   const [cw, ch] = cropBox(), gx = (sw - cw) * S.crop.x, gy = (sh - ch) * S.crop.y;
   g.drawImage(v, gx * kx, gy * ky, cw * kx, ch * ky, 0, topH, cv.width, cv.height - topH);
 }
+// ---------------------------------------------------------------- overlay image
+S.ov = null;   // {name, url, full, x, y, w, opacity}
+function renderOverlay(){
+  const img = $("#ovPrev"), ov = S.ov;
+  $("#ovCtl").classList.toggle("hidden", !ov); $("#ovClear").classList.toggle("hidden", !ov);
+  if (!ov) { img.style.display = "none"; return; }
+  if (img.getAttribute("src") !== ov.url) img.src = ov.url;
+  img.style.display = "block"; img.style.opacity = ov.opacity / 100;
+  img.classList.toggle("full", !!ov.full); img.classList.toggle("movable", !ov.full);
+  img.style.left = ov.x + "%"; img.style.top = ov.y + "%"; img.style.width = ov.w + "%"; img.style.height = "auto";
+  $("#ovFull").checked = !!ov.full; $("#ovsize").value = ov.w; $("#ov_opacity").value = ov.opacity; showOutputs();
+}
+function saveOv(){ store.set("overlay", S.ov); renderOverlay(); }
+$("#ovFile").onchange = () => {
+  const f = $("#ovFile").files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = async () => {
+    const r = await api("/api/overlay", {name:f.name, data:rd.result});
+    if (r.error) { alert(r.error); return; }
+    const im = new Image();
+    im.onload = () => {   // a picture the shape of the clip is a full frame; anything else a logo
+      const full = Math.abs(im.width / im.height - RATIO[S.aspect]) < 0.03;
+      S.ov = {name:r.name, url:r.url + "?t=" + Date.now(), full, x:50, y:full ? 50 : 12, w:full ? 100 : 30, opacity:100};
+      saveOv();
+    };
+    im.src = r.url + "?t=" + Date.now();
+  };
+  rd.readAsDataURL(f);
+};
+$("#ovClear").onclick = () => { S.ov = null; $("#ovFile").value = ""; saveOv(); };
+$("#ovFull").onchange = () => { if (S.ov) { S.ov.full = $("#ovFull").checked; if (!S.ov.full && S.ov.w > 90) S.ov.w = 30; saveOv(); } };
+$("#ovsize").oninput = () => { if (S.ov) { S.ov.w = +$("#ovsize").value; saveOv(); } };
+$("#ov_opacity").oninput = () => { if (S.ov) { S.ov.opacity = +$("#ov_opacity").value; saveOv(); } };
+(function(){
+  const img = $("#ovPrev"); let d = null;
+  img.addEventListener("pointerdown", e => {
+    if (!S.ov || S.ov.full) return;
+    e.preventDefault(); e.stopPropagation(); img.setPointerCapture(e.pointerId);
+    const r = $("#frame").getBoundingClientRect(); d = {x:e.clientX, y:e.clientY, w:r.width, h:r.height, x0:S.ov.x, y0:S.ov.y};
+  });
+  img.addEventListener("pointermove", e => {
+    if (!d) return;
+    S.ov.x = Math.round(Math.max(0, Math.min(100, d.x0 + (e.clientX - d.x) / d.w * 100)));
+    S.ov.y = Math.round(Math.max(0, Math.min(100, d.y0 + (e.clientY - d.y) / d.h * 100)));
+    renderOverlay();
+  });
+  const end = () => { if (d) saveOv(); d = null; };
+  img.addEventListener("pointerup", end); img.addEventListener("pointercancel", end);
+})();
 function drawFacePicker(){
   if (!splitting() || !S.prep) return;
   const cv = $("#faceCv"), v = vid(), [sw, sh] = S.dims, dpr = window.devicePixelRatio || 1;
@@ -1187,6 +1292,7 @@ $("#makeBtn").onclick = async () => {
     const r = await runJob("/api/make", {url:$("#url").value.trim(), browser:$("#browser").value,
       sec_start:S.prep.sec_start, sec_end:S.prep.sec_end, cut_in:S.cut[0], cut_out:S.cut[1],
       title:S.title || S.clip.title || "", aspect:S.aspect, crop: splitting() ? {...S.crop, face:S.face, split:S.split} : S.crop,
+      overlay: S.ov ? {name:S.ov.name, full:S.ov.full, x:S.ov.x, y:S.ov.y, w:S.ov.w, opacity:S.ov.opacity} : null,
       captions:$("#capOn").checked, words, lines, style:S.style, credit:$("#credit").value.trim(),
       headline:$("#headline").value.trim(), volume:+$("#volume").value}, $("#makeStatus"));
     $("#result").innerHTML = `<video src="${r.file}" controls playsinline></video><div class="hint">Saved as <b>${escapeHtml(r.name)}</b> in ${escapeHtml(S.info.out_dir)}</div>`;
@@ -1223,6 +1329,7 @@ const READY = (async () => {
   S.splitOn = !!store.get("splitOn", false); $("#splitOn").checked = S.splitOn;
   S.split = +store.get("split", 0.4) || 0.4; $("#splitPct").value = Math.round(S.split * 100);
   const sf = store.get("face", null); if (sf && sf.w > 0 && sf.h > 0) S.face = sf;
+  const so = store.get("overlay", null); if (so && so.name) { S.ov = so; renderOverlay(); }
   $("#smartLine").textContent = {
     claude:"Smart picks: Claude reads the transcript.",
     local:"Smart picks: the free local AI (Ollama) reads the transcript.",

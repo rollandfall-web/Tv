@@ -103,6 +103,7 @@ Useful options:
 | `--credit "twitch.tv/NAME"` | Shows the streamer's handle on screen for the whole clip. Use it whenever a campaign asks to "include the stream handle in the clip", and for any streamer you clip. |
 | `--headline "TEXT"` | Big text across the top for the whole clip (music edits with no talking). `" | "` starts a new line. |
 | `--face "75,0,25,30"` | With `--vertical`: streamer's camera on top, game below. The four numbers are the camera's box in the original video, in percent: left, top, width, height ("75,0,25,30" = top-right corner). Use it for every stream clip with a facecam. Ask the commander where the camera sits if you can't see it; never guess. `--split 40` sets how much of the height the camera takes (20-60). |
+| `--overlay "FILE.png"` | Puts an image on top of the clip when a streamer or campaign requires their frame, logo or watermark. A full-size frame covers the whole clip; for a logo add `--overlay-pos "80,90,30"` (centre left-right %, centre top-bottom %, width %). `--overlay-opacity 70` makes it see-through. Only use images the commander gives you. |
 | `--mute` or `--volume 20` | Remove the clip's own audio (to add a song in TikTok/Reels), or keep it quietly under music. |
 | `--skip-text` | Skip moments that already have subtitles or titles on screen (needs Tesseract). |
 | `--browser chrome` | When a video needs sign-in, is age-restricted or asks to "confirm you're not a bot". Uses Chrome's sign-in. |

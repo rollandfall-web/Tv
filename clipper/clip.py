@@ -476,8 +476,32 @@ def split_filter(src_w, src_h, aspect="9:16", face=None, split=0.4, x=0.5, y=0.5
     return graph, (out_w, out_h)
 
 
+def overlay_chain(base, ov, size):
+    """Put an image (a streamer's frame, logo or watermark) on top of the video.
+
+    base: the video filters so far (may be empty); ov: {"full": bool, "x", "y"
+    (centre, % of the frame), "w" (% of the frame width), "opacity" (0-100)};
+    the image must already be copied next to the clip as overlay.png.
+    """
+    out_w, out_h = size
+    op = max(0, min(100, float(ov.get("opacity", 100)))) / 100
+    if ov.get("full"):
+        scale = f"scale={out_w}:{out_h}"
+        pos = "0:0"
+    else:
+        w = max(2, int(out_w * max(1.0, min(100.0, float(ov.get("w", 30)))) / 100) // 2 * 2)
+        x = max(0.0, min(100.0, float(ov.get("x", 50)))) / 100
+        y = max(0.0, min(100.0, float(ov.get("y", 50)))) / 100
+        scale = f"scale={w}:-2"
+        pos = f"x={x:.4f}*main_w-overlay_w/2:y={y:.4f}*main_h-overlay_h/2"
+    alpha = f",colorchannelmixer=aa={op:.2f}" if op < 1 else ""
+    return (f"{base or 'null'}[base];movie=overlay.png,{scale}:flags=lanczos,format=rgba{alpha}[ov];"
+            f"[base][ov]overlay={pos}:format=auto")
+
+
 def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold",
-            lines=None, crop=None, on_progress=None, credit=None, headline=None, volume=100):
+            lines=None, crop=None, on_progress=None, credit=None, headline=None, volume=100,
+            overlay=None):
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
@@ -504,6 +528,11 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
             size = (1080, 1920)
         else:
             size = video_size(raw, ffmpeg)
+        if overlay and overlay.get("file") and os.path.isfile(overlay["file"]):
+            # Under the captions, over the picture. Copied next to the clip so the
+            # filter needs no path escaping (spaces, Windows drive letters).
+            shutil.copyfile(overlay["file"], os.path.join(os.path.dirname(os.path.abspath(raw)), "overlay.png"))
+            filters = [overlay_chain(",".join(filters), overlay, size)]
         if (words or credit or headline) and has_captions_support(ffmpeg):
             import captions
             ass = os.path.join(os.path.dirname(os.path.abspath(raw)), "captions.ass")
@@ -538,7 +567,7 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
 
 def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
                add_captions=False, caption_style="bold", transcribe="auto", credit=None,
-               headline=None, volume=100, crop=None):
+               headline=None, volume=100, crop=None, overlay=None):
     ffmpeg = find_ffmpeg()
     os.makedirs(outdir, exist_ok=True)
     base = safe_name(name or video_title(source))
@@ -585,7 +614,8 @@ def make_clips(source, clips, kind, outdir, name, quality, gif_width, gif_fps,
             if add_captions and (use_speech or words) and not clip_words:
                 print("    (no speech in this clip, so no captions)")
             convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, clip_words, caption_style,
-                    crop=crop, credit=credit, headline=headline, volume=volume)
+                    crop=crop, credit=credit, headline=headline, volume=volume,
+                    overlay=overlay)
             print(f"    saved {dest}")
             made.append(dest)
     return made
@@ -734,6 +764,15 @@ def main():
                           'e.g. "75,0,25,30" = top-right corner')
     lay.add_argument("--split", type=float, default=40, metavar="PCT",
                      help="how much of the height the camera takes, 20-60 (default: 40)")
+    ovl = p.add_argument_group("overlay image (a streamer's frame, logo or watermark)")
+    ovl.add_argument("--overlay", metavar="FILE",
+                     help="a PNG (transparent background works) put on top of the video. "
+                          "Without --overlay-pos it covers the whole frame (for full-size frames)")
+    ovl.add_argument("--overlay-pos", metavar="X,Y,W",
+                     help='where it goes, in percent: centre left-right, centre top-bottom, width. '
+                          'e.g. "50,10,40" = centred near the top, 40%% wide')
+    ovl.add_argument("--overlay-opacity", type=int, default=100, metavar="PCT",
+                     help="0-100 (default: 100)")
     cap.add_argument("--caption-style", choices=("bold", "clean"), default="bold",
                      help="bold = big yellow-highlight words (default); clean = smaller, sentence case")
     a = p.parse_args()
@@ -749,6 +788,17 @@ def main():
             p.error("--face works with --vertical")
         crop = {"aspect": "9:16", "face": {"x": fx, "y": fy, "w": fw, "h": fh},
                 "split": a.split / 100}
+    overlay = None
+    if a.overlay:
+        if not os.path.isfile(a.overlay):
+            p.error(f"overlay image not found: {a.overlay}")
+        overlay = {"file": os.path.abspath(a.overlay), "full": True, "opacity": a.overlay_opacity}
+        if a.overlay_pos:
+            try:
+                ox, oy, ow = [float(v) for v in a.overlay_pos.replace(" ", "").split(",")]
+            except ValueError:
+                p.error('--overlay-pos needs three percentages: x,y,width, e.g. "50,10,40"')
+            overlay.update(full=False, x=ox, y=oy, w=ow)
     global BROWSER
     BROWSER = a.browser
 
@@ -786,7 +836,7 @@ def main():
     made = make_clips(source, clips, kind, a.out, a.name or title, a.quality,
                       a.gif_width, a.gif_fps, a.captions, a.caption_style,
                       "always" if a.transcribe else "auto", a.credit, a.headline,
-                      0 if a.mute else a.volume, crop)
+                      0 if a.mute else a.volume, crop, overlay)
     print(f"\nDone. {len(made)} clip(s) saved in: {os.path.abspath(a.out)}")
 
 

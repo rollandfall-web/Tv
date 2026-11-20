@@ -353,15 +353,29 @@ _MODEL = {}
 WHISPER_SIZE = os.environ.get("CLIPMAKER_WHISPER", "small")   # tiny/base/small/medium
 
 
+WHISPER_LIBS = ("faster_whisper", "mlx_whisper", "whisper")
+_BACKEND = []      # cached answer of whisper_backend()
+
+
 def whisper_backend():
-    """Name of the installed speech-to-text library, or None."""
-    for name in ("faster_whisper", "mlx_whisper", "whisper"):
-        try:
-            __import__(name)
-            return name
-        except Exception:  # not installed, or broken install
-            continue
-    return None
+    """Name of the installed speech-to-text library, or None (imports it once)."""
+    if not _BACKEND:
+        found = None
+        for name in WHISPER_LIBS:
+            try:
+                __import__(name)
+                found = name
+                break
+            except Exception:  # not installed, or broken install
+                continue
+        _BACKEND.append(found)
+    return _BACKEND[0]
+
+
+def whisper_installed():
+    """Quick check without importing (speech libraries take seconds to load)."""
+    import importlib.util
+    return any(importlib.util.find_spec(n) for n in WHISPER_LIBS)
 
 
 INSTALL_HINT = ("Install speech-to-text once:  python3 -m pip install -U faster-whisper\n"

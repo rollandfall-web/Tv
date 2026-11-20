@@ -423,7 +423,7 @@ def info():
                   "local" if local_ok else "free"),
         "local_note": local_note or finder.LOCAL_HINT,
         "out_dir": OUT_DIR, "ffmpeg": ffmpeg_ok, "captions": caps, "ytdlp": ytdlp_ok,
-        "whisper": bool(captions.whisper_backend()), "whisper_hint": captions.INSTALL_HINT,
+        "whisper": captions.whisper_installed(), "whisper_hint": captions.INSTALL_HINT,
         "tesseract": bool(textcheck.tesseract()), "tesseract_hint": textcheck.INSTALL_HINT,
         "ai": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "presets": {name: {"vertical": captions.preset(name, True),
@@ -1466,7 +1466,7 @@ function drawFacePicker(){
   g.strokeStyle = "#ffe000"; g.lineWidth = 2 * dpr; g.strokeRect(bx, by, bw, bh);
   g.fillStyle = "#ffe000"; g.fillRect(bx + bw - 7 * dpr, by + bh - 7 * dpr, 14 * dpr, 14 * dpr);
 }
-vid().addEventListener("seeked", drawFacePicker);
+vid().addEventListener("seeked", () => { drawFacePicker(); drawSplit(); });
 vid().addEventListener("loadeddata", () => { drawFacePicker(); drawSplit(); });
 $("#splitOn").onchange = () => {
   S.splitOn = $("#splitOn").checked; store.set("splitOn", S.splitOn);
@@ -1535,17 +1535,21 @@ function updateTrim(){
 }
 document.querySelectorAll("[data-t]").forEach(b => b.onclick = () => { const i = b.dataset.t === "in" ? 0 : 1; S.cut[i] += +b.dataset.d; updateTrim(); vid().currentTime = S.cut[i] - (i ? 1.5 : 0); });
 document.querySelectorAll("[data-set]").forEach(b => b.onclick = () => { S.cut[b.dataset.set === "in" ? 0 : 1] = vid().currentTime; updateTrim(); });
-(function loop(){
+// Redraw only while playing or after the playhead moves; controls redraw on their own.
+let lastT = -1, lastPaused = null, lastPicker = 0;
+(function loop(now){
   const v = vid();
-  if (S.prep && !$("#editor").classList.contains("hidden")) {
+  if (S.prep && !$("#editor").classList.contains("hidden") && (!v.paused || v.currentTime !== lastT || v.paused !== lastPaused)) {
     if (!v.paused && v.currentTime >= S.cut[1]) { v.pause(); v.currentTime = S.cut[1]; }
+    lastT = v.currentTime; lastPaused = v.paused;
     $("#seek").value = v.currentTime; $("#tc").textContent = fmtT1(S.prep.sec_start + v.currentTime);
     $("#playBtn").textContent = v.paused ? "▶" : "❚❚";
-    drawSplit(); if (!v.paused) drawFacePicker();
+    drawSplit();
+    if (!v.paused && now - lastPicker > 200) { lastPicker = now; drawFacePicker(); }   // 5 per second is plenty
     renderCap();
   }
   requestAnimationFrame(loop);
-})();
+})(0);
 
 // ---------------------------------------------------------------- caption words
 function chunk(words, max){
@@ -1571,7 +1575,7 @@ function setLineText(i, text){
   S.lines[i] = nl;
 }
 function renderLines(){
-  const box = $("#lines"); if (!box) return; box.innerHTML = "";
+  const box = $("#lines"); if (!box) return; box.innerHTML = ""; nowLine = undefined;
   if (!S.lines.length) { box.innerHTML = '<div class="line"><span class="hint">No caption lines.</span></div>'; return; }
   S.lines.forEach((l, i) => {
     const d = document.createElement("div"); d.className = "line"; d.dataset.i = i;
@@ -1630,14 +1634,15 @@ $("#capOn").onchange = () => $("#capPanel").classList.toggle("hidden", !$("#capO
 // ---------------------------------------------------------------- live caption preview
 function renderCredit(){
   const el = $("#creditPrev"), t = $("#credit").value.trim(), H = $("#frame").clientHeight, vertical = S.aspect !== "16:9";
-  el.textContent = t;
+  if (el.textContent !== t) el.textContent = t;
   el.style.top = (vertical ? 12 : 5) + "%";
   el.style.fontSize = (H * (vertical ? 0.03 : 0.045)) + "px";
 }
 $("#credit").addEventListener("input", () => { store.set("credit", $("#credit").value); renderCredit(); });
 function renderHeadline(){
   const el = $("#headPrev"), H = $("#frame").clientHeight, vertical = S.aspect !== "16:9";
-  el.textContent = $("#headline").value.trim();
+  const t = $("#headline").value.trim();
+  if (el.textContent !== t) el.textContent = t;
   el.style.top = (vertical ? 19 : 12) + "%";
   el.style.fontSize = (H * (vertical ? 0.045 : 0.07)) + "px";
 }
@@ -1646,18 +1651,22 @@ $("#volume").addEventListener("input", () => {
   const v = +$("#volume").value; vid().volume = v / 100; vid().muted = v === 0;
   $("#volume").parentElement.querySelector("output").textContent = v + "%";
 });
+// Write to the page only when something changed (rebuilding text every frame is costly).
+const lastHTML = new WeakMap();
+function setHTML(el, html){ if (lastHTML.get(el) !== html) { el.innerHTML = html; lastHTML.set(el, html); } }
+let nowLine;
 function renderCap(){
   renderCredit(); renderHeadline();
   const cap = $("#cap"), st = S.style;
   cap.classList.remove("movable", "ghost"); cap.style.transform = ""; cap.style.opacity = "";
-  if (!$("#capOn").checked || !S.lines.length) { cap.innerHTML = ""; return; }
+  if (!$("#capOn").checked || !S.lines.length) { setHTML(cap, ""); return; }
   const t = vid().currentTime || 0;
   let line = S.lines.find(l => t >= l[0].s && t < lineEnd(l));
-  document.querySelectorAll(".line").forEach(d => d.classList.toggle("now", S.lines[+d.dataset.i] === line));
+  if (line !== nowLine) { nowLine = line; document.querySelectorAll(".line").forEach(d => d.classList.toggle("now", S.lines[+d.dataset.i] === line)); }
   if (line && (t < S.cut[0] || t > S.cut[1])) line = null;
   let ghost = false;
   if (!line) {               // paused between lines: show one faded so it can be dragged into place
-    if (!vid().paused) { cap.innerHTML = ""; return; }
+    if (!vid().paused) { setHTML(cap, ""); return; }
     line = S.lines.find(l => lineEnd(l) > S.cut[0]) || S.lines[0]; ghost = true;
   }
   cap.classList.add("movable"); cap.classList.toggle("ghost", ghost);
@@ -1682,7 +1691,7 @@ function renderCap(){
     const scale = on && anim === "pop" ? "transform:scale(1.12);" : "";
     return `<span class="wd" style="color:${col};-webkit-text-stroke:${ow*2}px ${hex2rgba(st.outline_color, op)};paint-order:stroke fill;${shadow}${scale}${hide}">${txt}</span>`;
   }).join(" ");
-  cap.innerHTML = `<span class="box" style="${box}">${html}</span>`;
+  setHTML(cap, `<span class="box" style="${box}">${html}</span>`);
   // Same rule as the final render: pull the line in so none of it goes off screen.
   const W = $("#frame").clientWidth, tw = Math.min(cap.firstChild.getBoundingClientRect().width, W * 0.88);
   const half = tw / 2 / W * 100, cx = Math.max(half + 3, Math.min(100 - half - 3, x));

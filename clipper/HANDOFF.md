@@ -100,6 +100,12 @@ Location: `/Volumes/Mac Memory Drive/ClipMaker`. Clips save to `ClipMaker/Clips`
 - Long VODs: the first search downloads the stream's audio once (a long
   marathon can take most of an hour); after that, searching the same link is
   instant and a clickable hype map of the whole stream appears.
+- Videos already on the Mac: the **Upload video** button copies a file (MP4, MOV, MKV,
+  WebM) into `Raw/_uploads/` with a progress bar (never overwrites: _2, _3) and loads it
+  like a pasted link. Or pick a video already in `Raw/` from the list (no copy), or
+  click "Open Raw folder". A `.txt` card next to the video (or in `Raw/STREAMER/` with
+  the same name, for uploads) is shown: Source, Timestamp, Facecam, Caption idea; its
+  `--face "X,Y,W,H"` turns on Facecam on top with that box. Nothing leaves the Mac.
 - Editor: 9:16 / 4:5 / 1:1 / 16:9, drag and zoom framing, "Facecam on top, game
   below", trim, captions you can edit and drag, caption animations, streamer
   handle text, title text, clip sound volume (0% for music campaigns), overlay
@@ -165,3 +171,13 @@ date) and say what's real and what's missing.
 5. Dylan Page: clip his live marathon (0 competition when joined).
 6. Aron Orlando: make one strong Vice City edit, submit it as a draft first.
 7. Teammate: share the Drive folder and settle his role (see TEAM-STATE open questions).
+
+## Change log
+
+Newest first. Claude Code adds a line here with every change it commits.
+
+- Nov 20, 2026: Upload video button and Raw folder picker (with .txt cards and facecam
+  pre-fill). Editor preview uses much less CPU; page loads faster.
+- Nov 19, 2026: Merged campaign list committed (private details moved to
+  `Outreach/PRIVATE.md`). Live recording, saved scans and hype map for long VODs,
+  facecam split, overlays, caption drag and animations, faster downloads, clearer layout.

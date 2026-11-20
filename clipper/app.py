@@ -7,6 +7,7 @@ Start it by double-clicking "Clip Maker.command" (Mac) or "Clip Maker.bat"
 It runs only on your own computer (http://127.0.0.1) and saves clips to
 Movies/Clip Maker (Mac) or Videos/Clip Maker (Windows).
 """
+import glob
 import hashlib
 import json
 import os
@@ -432,13 +433,125 @@ def info():
     }
 
 
-def open_folder():
+def open_folder(folder=None):
+    folder = folder or OUT_DIR
+    os.makedirs(folder, exist_ok=True)
     if sys.platform == "darwin":
-        subprocess.Popen(["open", OUT_DIR])
+        subprocess.Popen(["open", folder])
     elif os.name == "nt":
-        os.startfile(OUT_DIR)  # noqa: S606 (Windows only)
+        os.startfile(folder)  # noqa: S606 (Windows only)
     else:
-        subprocess.Popen(["xdg-open", OUT_DIR])
+        subprocess.Popen(["xdg-open", folder])
+
+
+# ---------------------------------------------------------------- local videos (Raw/)
+# Videos already on this computer: picked from Raw/ or uploaded into Raw/_uploads/.
+# Nothing here leaves the machine; "upload" only copies a file from the browser
+# into the ClipMaker folder so every tool can use it like a pasted link.
+RAW_DIR = os.path.join(ROOT, "Raw")
+UPLOAD_DIR = os.path.join(RAW_DIR, "_uploads")
+VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm")
+MAX_UPLOAD = 50 * 1024 ** 3          # 50 GB
+
+
+def unique_path(folder, name):
+    """folder/name, or name_2, name_3... if that file already exists."""
+    base, ext = os.path.splitext(name)
+    path, n = os.path.join(folder, name), 2
+    while os.path.exists(path) or os.path.exists(path + ".part"):
+        path = os.path.join(folder, f"{base}_{n}{ext}")
+        n += 1
+    return path
+
+
+def clean_upload_name(name):
+    name = os.path.basename(str(name or "").replace("\\", "/")).strip()
+    name = re.sub(r'[\x00-\x1f/:*?"<>|]+', "_", name).strip(". ")
+    return name[:150] or "video.mp4"
+
+
+def is_video(path):
+    """True if ffmpeg finds a real video stream (not just a cover picture)."""
+    r = subprocess.run([clip.find_ffmpeg(), "-hide_banner", "-i", path],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                       errors="replace", timeout=60)
+    return any("Video:" in l and "attached pic" not in l for l in r.stderr.splitlines())
+
+
+CARD_KEYS = {"source": "Source", "timestamp": "Timestamp", "time": "Timestamp",
+             "facecam": "Facecam", "face": "Facecam", "caption idea": "Caption idea",
+             "caption": "Caption idea", "campaign": "Campaign", "streamer": "Streamer"}
+
+
+def find_card(video):
+    """The .txt card for a video: next to it, or for an upload, in Raw/<streamer>/."""
+    stem = os.path.splitext(os.path.basename(video))[0]
+    here = os.path.join(os.path.dirname(video), stem + ".txt")
+    if os.path.isfile(here):
+        return here
+    if os.path.realpath(os.path.dirname(video)) == os.path.realpath(UPLOAD_DIR):
+        base = re.sub(r"_\d+$", "", stem)          # "clip_2.mp4" came from "clip.mp4"
+        for folder in [RAW_DIR] + sorted(glob.glob(os.path.join(RAW_DIR, "*"))):
+            if os.path.realpath(folder) == os.path.realpath(UPLOAD_DIR) or not os.path.isdir(folder):
+                continue
+            for s in (stem, base):
+                cand = os.path.join(folder, s + ".txt")
+                if os.path.isfile(cand):
+                    return cand
+    return None
+
+
+def read_card(video):
+    path = find_card(video)
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(8000)
+    except OSError:
+        return None
+    fields = []
+    for line in text.splitlines():
+        m = re.match(r"^\s*[-*]?\s*\**([A-Za-z][A-Za-z /]{1,30}?)\**\s*:\s*(.+)$", line)
+        if m and m.group(1).strip().lower() in CARD_KEYS:
+            fields.append([CARD_KEYS[m.group(1).strip().lower()], m.group(2).strip()])
+    face = None
+    m = re.search(r"(?:--face|face(?:cam)?[^\n\d]{0,20})[\s=:\"']*"
+                  r"(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)",
+                  text, flags=re.I)
+    if m:
+        x, y, w, h = (float(v) for v in m.groups())
+        if 0 <= x < 100 and 0 <= y < 100 and 0 < w <= 100 and 0 < h <= 100:
+            face = [x, y, w, h]
+    rel = os.path.relpath(path, ROOT)
+    return {"file": rel, "text": text, "fields": fields, "face": face}
+
+
+def list_raw(limit=500):
+    out = []
+    if not os.path.isdir(RAW_DIR):
+        return out
+    for folder, dirs, files in os.walk(RAW_DIR):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for f in files:
+            if f.lower().endswith(VIDEO_EXTS) and not f.startswith("."):
+                full = os.path.join(folder, f)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                out.append({"rel": os.path.relpath(full, RAW_DIR), "size": st.st_size,
+                            "mtime": st.st_mtime, "card": bool(find_card(full))})
+    out.sort(key=lambda r: -r["mtime"])
+    return out[:limit]
+
+
+def raw_file(rel):
+    """Absolute path of a video inside Raw/, or None if it's outside or missing."""
+    full = os.path.realpath(os.path.join(RAW_DIR, str(rel or "")))
+    if not full.startswith(os.path.realpath(RAW_DIR) + os.sep) or not os.path.isfile(full):
+        return None
+    return full if full.lower().endswith(VIDEO_EXTS) else None
 
 
 # ---------------------------------------------------------------- web server
@@ -519,6 +632,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(body)
         if path == "/api/info":
             return self.send_json(info())
+        if path == "/api/raw":
+            return self.send_json({"root": RAW_DIR, "files": list_raw()})
         if path.startswith("/api/job/"):
             job = JOBS.get(path.rsplit("/", 1)[-1])
             if not job:
@@ -540,9 +655,65 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file(full, "video/mp4")
         self.send_error(404)
 
+    def handle_upload(self):
+        """Stream a video from the page into Raw/_uploads/ (local only)."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        name = clean_upload_name(unquote(self.headers.get("X-Filename", "")))
+
+        def refuse(msg):
+            self.close_connection = True
+            return self.send_json({"error": msg}, 400)
+        if not name.lower().endswith(VIDEO_EXTS):
+            return refuse("That isn't a video file. Use an MP4, MOV, MKV or WebM.")
+        if length <= 0:
+            return refuse("The file is empty.")
+        if length > MAX_UPLOAD:
+            return refuse(f"That file is {length / 1024 ** 3:.1f} GB; the limit is "
+                          f"{MAX_UPLOAD // 1024 ** 3} GB. Cut it shorter first, or put it in "
+                          "the Raw folder and pick it from the list instead.")
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        free = shutil.disk_usage(UPLOAD_DIR).free
+        if free < length + 512 * 1024 ** 2:
+            return refuse(f"Not enough free space on this drive: the file needs "
+                          f"{length / 1024 ** 3:.1f} GB and {free / 1024 ** 3:.1f} GB is free.")
+        dest = unique_path(UPLOAD_DIR, name)
+        part = dest + ".part"
+        left = length
+        try:
+            with open(part, "wb") as fh:
+                while left > 0:
+                    chunk = self.rfile.read(min(left, 1024 * 1024))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    left -= len(chunk)
+        except OSError as err:
+            left = -1
+            msg = f"Couldn't save the file: {err}"
+        if left != 0:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return refuse(msg if left < 0 else "The upload stopped part way. Try again.")
+        if not is_video(part):
+            os.remove(part)
+            return refuse("That file doesn't contain a video ffmpeg can read.")
+        os.replace(part, dest)
+        return self.send_json({"path": dest, "name": os.path.basename(dest),
+                               "size": length, "card": read_card(dest)})
+
     def do_POST(self):
         if not self.host_ok():
             return self.send_error(403)
+        if urlparse(self.path).path == "/api/upload":
+            # A custom header forces a CORS preflight, so other websites can't post here.
+            if not self.headers.get("X-Filename"):
+                return self.send_error(400)
+            return self.handle_upload()
         try:
             length = int(self.headers.get("Content-Length") or 0)
             p = json.loads(self.rfile.read(length) or b"{}")
@@ -564,8 +735,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": str(err)}, 400)
             return self.send_json({"name": name, "url": "/overlay/" + name})
         if path == "/api/open":
-            open_folder()
+            open_folder(RAW_DIR if p.get("folder") == "raw" else None)
             return self.send_json({"ok": True})
+        if path == "/api/rawpick":
+            full = raw_file(p.get("rel"))
+            if not full:
+                return self.send_json({"error": "That file isn't in the Raw folder any more."}, 404)
+            return self.send_json({"path": full, "name": os.path.basename(full), "card": read_card(full)})
         if path == "/api/settings":
             try:
                 return self.send_json({"out_dir": set_out_dir(str(p.get("out_dir") or ""))})
@@ -699,6 +875,13 @@ details.grp>summary span{font-size:12px;color:var(--muted);font-weight:400}
 details.more{margin-top:10px}
 details.more>summary{cursor:pointer;font-size:13px;color:var(--muted)}
 #hypeWrap{margin-bottom:14px}
+.cardBox{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;font-size:13px}
+.cardBox dl{display:grid;grid-template-columns:110px 1fr;gap:4px 10px;margin:6px 0 0}
+.cardBox dt{color:var(--muted)}
+.cardBox dd{margin:0;overflow-wrap:anywhere}
+.cardBox pre{white-space:pre-wrap;font-size:12px;margin:6px 0 0;max-height:220px;overflow:auto}
+.cardBox code{font-size:12px;overflow-wrap:anywhere}
+#rawPick{max-width:100%}
 #hypeCv{display:block;width:100%;height:90px;border-radius:8px;background:var(--soft);cursor:pointer}
 .hypeAxis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
 .result video{width:100%;max-width:360px;border-radius:12px;display:block;margin:10px 0}
@@ -725,6 +908,15 @@ details.more>summary{cursor:pointer;font-size:13px;color:var(--muted)}
       </select>
     </div>
     <p class="hint">Sign-in is only needed when a video is age-restricted, subscriber-only, or says "confirm you're not a bot". It uses the browser you're already signed into; no password is asked.</p>
+    <div class="row" style="margin-top:10px">
+      <button id="upBtn">Upload video</button>
+      <input id="upFile" type="file" accept=".mp4,.mov,.mkv,.webm,video/mp4,video/quicktime,video/x-matroska,video/webm" class="hidden">
+      <select id="rawPick" title="Videos already in the ClipMaker Raw folder"><option value="">Or pick a video from the Raw folder...</option></select>
+      <button class="small" id="rawOpen">Open Raw folder</button>
+    </div>
+    <p class="hint">For a video already on this Mac (MP4, MOV, MKV or WebM). Nothing leaves your computer: uploads are copied into <b id="rawUp">ClipMaker/Raw/_uploads</b>. Your browser can't open the picker in a set folder, so go to <b id="rawPath">ClipMaker/Raw</b> yourself, or pick from the list (that also reads each video's .txt card).</p>
+    <div id="upStatus" class="status"></div>
+    <div id="cardBox" class="cardBox hidden"></div>
 
     <div class="opt">
       <h3>A. Find the best moments for me</h3>
@@ -1024,6 +1216,77 @@ $("#recBtn").onclick = async () => {
     $("#url").value = r.path; S.title = r.title; S.map = null;
     status($("#findStatus"), "Recorded and loaded. Now use A (find the best moments) or B (edit an exact part).");
   } catch(e) {} finally { $("#recBtn").disabled = false; $("#findBtn").disabled = false; }
+};
+
+// ---------------------------------------------------------------- local videos (upload / Raw folder)
+const UP_EXT = /\.(mp4|mov|mkv|webm)$/i, UP_MAX = 50 * 1024 ** 3;
+function useLocalVideo(r, how){
+  $("#url").value = r.path; S.title = r.name.replace(/\.[^.]+$/, ""); S.map = null;
+  $("#picksCard").classList.add("hidden");
+  showCard(r.card, r.path);
+  status($("#upStatus"), `${how} ${r.name}. Now use A (find the best moments) or B (edit an exact part).`);
+}
+function showCard(card, path){
+  const box = $("#cardBox");
+  if (!card) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  let face = "";
+  if (card.face) {
+    const [x, y, w, h] = card.face;
+    S.face = {x:x/100, y:y/100, w:w/100, h:h/100}; S.splitOn = true; $("#splitOn").checked = true;
+    store.set("face", S.face); store.set("splitOn", true);
+    face = `${x},${y},${w},${h}`;
+  }
+  const rows = card.fields.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("");
+  const cmd = `python3 clipper/clip.py "${path}" --clips "START-END" --vertical --captions` + (face ? ` --face "${face}"` : "");
+  box.innerHTML = `<b>Card: ${escapeHtml(card.file)}</b>` +
+    (rows ? `<dl>${rows}</dl>` : `<p class="hint">No Source / Timestamp / Facecam / Caption idea lines found; full card below.</p>`) +
+    (face ? `<p class="hint">Facecam box set from the card (${face}); "Facecam on top" will be on in the editor.</p>` : "") +
+    `<details style="margin-top:6px"><summary class="hint" style="cursor:pointer">Full card and command line</summary><pre>${escapeHtml(card.text)}</pre><p class="hint">Command line for this file:</p><code>${escapeHtml(cmd)}</code></details>`;
+  box.classList.remove("hidden");
+}
+async function loadRaw(){
+  try {
+    const r = await api("/api/raw");
+    $("#rawPath").textContent = r.root; $("#rawUp").textContent = r.root + "/_uploads";
+    const sel = $("#rawPick"), keep = sel.value;
+    sel.length = 1;
+    r.files.forEach(f => { const o = document.createElement("option"); o.value = f.rel;
+      o.textContent = f.rel + (f.card ? "  (card)" : "") + "  ·  " + (f.size / 1024 ** 2).toFixed(0) + " MB"; sel.appendChild(o); });
+    sel.value = keep;
+  } catch(e) {}
+}
+loadRaw();
+$("#rawPick").onfocus = loadRaw;
+$("#rawPick").onchange = async () => {
+  const rel = $("#rawPick").value; if (!rel) return;
+  const r = await api("/api/rawpick", {rel});
+  if (r.error) return status($("#upStatus"), r.error, "err");
+  useLocalVideo(r, "Loaded");
+};
+$("#rawOpen").onclick = () => api("/api/open", {folder:"raw"});
+$("#upBtn").onclick = () => $("#upFile").click();
+$("#upFile").onchange = () => {
+  const f = $("#upFile").files[0]; $("#upFile").value = "";
+  if (!f) return;
+  if (!UP_EXT.test(f.name)) return status($("#upStatus"), "That isn't a video file. Use an MP4, MOV, MKV or WebM.", "err");
+  if (f.size > UP_MAX) return status($("#upStatus"), `That file is ${(f.size / 1024 ** 3).toFixed(1)} GB; the limit is 50 GB. Put it in the Raw folder and pick it from the list instead.`, "err");
+  const el = $("#upStatus"), t0 = Date.now(), xhr = new XMLHttpRequest();
+  $("#upBtn").disabled = true;
+  xhr.open("POST", "/api/upload");
+  xhr.setRequestHeader("X-Filename", encodeURIComponent(f.name));
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.upload.onprogress = e => { if (e.lengthComputable)
+    status(el, e.loaded < e.total ? `Copying ${f.name} into the ClipMaker folder...` : "Checking the video...", "busy",
+           {pct: e.loaded / e.total * 0.98, elapsed: (Date.now() - t0) / 1000}); };
+  xhr.onload = () => {
+    $("#upBtn").disabled = false;
+    let r = {}; try { r = JSON.parse(xhr.responseText); } catch(e) {}
+    if (xhr.status !== 200 || r.error) return status(el, r.error || "The upload failed. Is the Clip Maker window still open?", "err");
+    loadRaw(); useLocalVideo(r, "Uploaded");
+  };
+  xhr.onerror = () => { $("#upBtn").disabled = false; status(el, "The upload stopped. Is the Clip Maker window still open? Try again.", "err"); };
+  status(el, `Copying ${f.name} into the ClipMaker folder...`, "busy", {pct:0, elapsed:0});
+  xhr.send(f);
 };
 
 function showPicks(clips){

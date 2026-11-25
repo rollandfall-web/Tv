@@ -109,6 +109,67 @@ def clean_word(w):
     return w.replace("\\", "").replace("{", "").replace("}", "")
 
 
+# ---------------------------------------------------------------- profanity
+
+PROFANITY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profanity.txt")
+_PROF = {}
+
+
+def profanity_list():
+    """(exact words, prefixes) from profanity.txt; re-read when the file changes."""
+    try:
+        mtime = os.path.getmtime(PROFANITY_FILE)
+    except OSError:
+        return set(), ()
+    if _PROF.get("mtime") != mtime:
+        exact, prefix = set(), []
+        with open(PROFANITY_FILE, encoding="utf-8") as fh:
+            for line in fh:
+                w = line.strip().lower()
+                if not w or w.startswith("#"):
+                    continue
+                if w.endswith("*"):
+                    prefix.append(re.sub(r"[^a-z]", "", w))
+                else:
+                    exact.add(re.sub(r"[^a-z]", "", w))
+        _PROF.update(mtime=mtime, exact=exact, prefix=tuple(p for p in prefix if p))
+    return _PROF["exact"], _PROF["prefix"]
+
+
+def is_profane(word):
+    core = re.sub(r"[^a-z]", "", str(word).lower())
+    if not core:
+        return False
+    exact, prefix = profanity_list()
+    return core in exact or core.startswith(prefix)
+
+
+def censor(word):
+    """f*** for fuck: first letter, then a star per remaining letter; punctuation kept."""
+    w = str(word)
+    m = re.match(r"^([^A-Za-z]*)([A-Za-z].*?)([^A-Za-z]*)$", w)
+    if not m:
+        return w
+    lead, core, tail = m.groups()
+    return lead + core[0] + "*" * (len(core) - 1) + tail
+
+
+def bleep_spans(words, pad=0.05, end=None):
+    """Merged (start, end) spans covering every profane word, padded on each side.
+    words: dicts with s, e, w (clip time). Returns (spans, number of words)."""
+    spans = sorted((max(0.0, float(w["s"]) - pad), float(w["e"]) + pad)
+                   for w in words if is_profane(w["w"]))
+    if end is not None:
+        spans = [(a, min(b, end)) for a, b in spans if a < end]
+    merged = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged, len(spans)
+
+
 def chunk_words(words, max_words):
     """Group words into short lines; break on pauses and sentence ends."""
     chunks, cur = [], []

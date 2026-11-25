@@ -1,0 +1,23 @@
+# Words the Clip Maker bleeps when "Bleep profanity" is on.
+# One word per line, lowercase. Capitals and punctuation in the video's words are ignored.
+# A * at the end also matches longer forms: fuck* matches fuck, fucking, fucked, fucker.
+# Without a *, only that exact word matches (so "ass" doesn't catch "pass" or "assist").
+# Lines starting with # are ignored. To bleep "damn" too, delete the # in front of it.
+fuck*
+motherfuck*
+shit*
+bullshit*
+bitch*
+ass
+asses
+asshole*
+dick
+dicks
+dickhead*
+pussy
+pussies
+cunt*
+nigga*
+nigger*
+# damn
+# goddamn*

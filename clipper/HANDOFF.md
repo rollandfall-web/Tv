@@ -100,6 +100,12 @@ Location: `/Volumes/Mac Memory Drive/ClipMaker`. Clips save to `ClipMaker/Clips`
 - Long VODs: the first search downloads the stream's audio once (a long
   marathon can take most of an hour); after that, searching the same link is
   instant and a clickable hype map of the whole stream appears.
+- **Bleep profanity** (Sound section of the editor, on by default, remembered): uses the
+  caption word timings to cover swear words with a 1 kHz bleep or silence (choose Bleep
+  tone or Mute), and captions show them as f***. Word list: `clipper/profanity.txt`, one
+  word per line; a * at the end catches longer forms (fuck* = fucking, fucked). "damn" is
+  in the list but switched off (remove its #). Needs word timings: with captions off and
+  no transcript it says "Can't bleep" and still makes the clip. Not needed for 0% (music) clips.
 - Found moments show **3 preview frames each** (at 15%, 50% and 85% of the clip), so
   you can tell gameplay from menus or chatting before loading a clip. Frames are cached;
   if they can't be fetched, the moment shows "No preview frames" and still works.
@@ -126,8 +132,11 @@ Location: `/Volumes/Mac Memory Drive/ClipMaker`. Clips save to `ClipMaker/Clips`
   curl -L -o clipmaker.zip https://github.com/rollandfall-web/Tv/archive/refs/heads/claude/youtube-clip-maker-lyx2h0.zip
   unzip -o -q clipmaker.zip && cp -R Tv-claude-youtube-clip-maker-lyx2h0/ ClipMaker/
   rm -rf Tv-claude-youtube-clip-maker-lyx2h0 clipmaker.zip
+  cd ClipMaker && chmod +x "Clip Maker.command" "Start Clip Maker.command"; cd ..
   ```
-  Then restart the app and open a new Chrome tab. This replaces `clipper/HANDOFF.md`
+  (Unzipping drops the run permission, so the chmod line makes the double-click
+  launchers work again. If "Start Clip Maker.command" doesn't exist, chmod just
+  says so; that's fine.) Then restart the app and open a new Chrome tab. This replaces `clipper/HANDOFF.md`
   with the repo's copy, so edit HANDOFF through the repo (ask Claude Code to commit
   changes). Keep private details in `Outreach/PRIVATE.md`; the repo is public.
 - Errors print a "How to fix" line; follow it.
@@ -181,6 +190,9 @@ date) and say what's real and what's missing.
 
 Newest first. Claude Code adds a line here with every change it commits.
 
+- Nov 25, 2026: "Bleep profanity" option in the editor (bleep tone or mute, captions show
+  f***, word list in clipper/profanity.txt). Update steps now re-add the run permission to
+  the .command launchers after unzipping.
 - Nov 25, 2026: Preview frames under each found moment (3 per moment). `Clip Maker.command`
   now starts with a Python that has yt-dlp. Tested here on a local file and a web link;
   still to test on the Mac with a real YouTube and a real Twitch link. Ideas for later

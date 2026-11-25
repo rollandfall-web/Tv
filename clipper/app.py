@@ -425,6 +425,32 @@ def job_make(job, p):
             lines = [l for l in lines if l] or None
             words = words or None
 
+    # Bleep profanity: find bad words in the word timings (captions shown or not).
+    bleeps, notes = None, []
+    try:
+        volume = int(p.get("volume", 100))
+    except (TypeError, ValueError):
+        volume = 100
+    if p.get("bleep") and volume > 0:
+        timed = []
+        for w in p.get("words") or []:
+            s, e = float(w["s"]) - cut_in, float(w["e"]) - cut_in
+            if e > 0 and s < cut_out - cut_in:
+                timed.append({"s": max(0.0, s), "e": min(cut_out - cut_in, e), "w": w["w"]})
+        if not timed:
+            notes.append("Can't bleep: no word timings. Turn on captions or use auto transcript.")
+        else:
+            bleeps, n = captions.bleep_spans(timed, pad=0.05, end=cut_out - cut_in)
+            notes.append(f"Bleeped {n} word{'s' if n != 1 else ''}"
+                         + (" (mute)." if p.get("bleep_mode") == "mute" else " (bleep tone).")
+                         if n else "No profanity found, nothing bleeped.")
+            if words:      # captions show f*** instead of the word
+                for w in words:
+                    if captions.is_profane(w["w"]):
+                        w["w"] = captions.censor(w["w"])
+        for nt in notes:
+            job.log(nt)
+
     title = (p.get("title") or "").strip() or clip.video_title(url)
     abs_in, abs_out = sec_start + cut_in, sec_start + cut_out
     tag = aspect.replace(":", "x")
@@ -446,10 +472,6 @@ def job_make(job, p):
         if credit and not clip.has_captions_support(ffmpeg):
             job.log("Your ffmpeg can't draw text, so the credit wasn't added (Mac fix: brew install ffmpeg-full).")
         headline = (p.get("headline") or "").strip()[:200] or None
-        try:
-            volume = int(p.get("volume", 100))
-        except (TypeError, ValueError):
-            volume = 100
         overlay = None
         ov = p.get("overlay") or {}
         if ov.get("name"):
@@ -460,8 +482,9 @@ def job_make(job, p):
                 job.log("The overlay image is missing, so it wasn't added. Upload it again.")
         clip.convert(raw, dest, "mp4", ffmpeg, 480, 12, words, p.get("style") or "bold",
                      lines, crop, on_progress=job.span(0.35, 1.0), credit=credit,
-                     headline=headline, volume=volume, overlay=overlay)
-    return {"file": "/out/" + os.path.basename(dest), "name": os.path.basename(dest)}
+                     headline=headline, volume=volume, overlay=overlay,
+                     bleeps=bleeps, bleep_mode="mute" if p.get("bleep_mode") == "mute" else "tone")
+    return {"file": "/out/" + os.path.basename(dest), "name": os.path.basename(dest), "notes": notes}
 
 
 def info():
@@ -482,7 +505,8 @@ def info():
                   "local" if local_ok else "free"),
         "local_note": local_note or finder.LOCAL_HINT,
         "out_dir": OUT_DIR, "ffmpeg": ffmpeg_ok, "captions": caps, "ytdlp": ytdlp_ok,
-        "whisper": captions.whisper_installed(), "whisper_hint": captions.INSTALL_HINT,
+        "whisper": captions.whisper_installed(),
+        "profanity": {"exact": sorted(captions.profanity_list()[0]), "prefix": list(captions.profanity_list()[1])}, "whisper_hint": captions.INSTALL_HINT,
         "tesseract": bool(textcheck.tesseract()), "tesseract_hint": textcheck.INSTALL_HINT,
         "ai": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "presets": {name: {"vertical": captions.preset(name, True),
@@ -1097,6 +1121,11 @@ details.more>summary{cursor:pointer;font-size:13px;color:var(--muted)}
           <summary><b>Sound</b><span>The clip's own audio</span></summary>
           <div class="ctl"><label for="volume">Clip sound</label><input id="volume" type="range" min="0" max="100" step="5" value="100"><output></output></div>
           <p class="hint" style="margin:-2px 0 0">100% = normal. 0% = silent, for adding a song in TikTok or Reels (music campaigns). About 20% = game sounds quietly under a song.</p>
+          <div class="row" style="margin-top:10px">
+            <label class="chk"><input id="bleepOn" type="checkbox" checked> Bleep profanity</label>
+            <select id="bleepMode"><option value="tone">Bleep tone</option><option value="mute">Mute</option></select>
+          </div>
+          <p class="hint" style="margin:4px 0 0">Covers swear words using the caption word timings (TikTok limits clips with swearing). Captions show them as f***. The word list is clipper/profanity.txt.</p>
         </details>
 
         <details class="grp" id="ovGrp">
@@ -1228,7 +1257,10 @@ async function runJob(path, body, el){
 }
 
 // ---------------------------------------------------------------- steps 1-2
-["capDefault","skipText"].forEach(id => { const el = $("#"+id); el.checked = store.get(id, true); el.onchange = () => store.set(id, el.checked); });
+["capDefault","skipText","bleepOn"].forEach(id => { const el = $("#"+id); el.checked = store.get(id, true); el.onchange = () => store.set(id, el.checked); });
+$("#bleepMode").value = store.get("bleepMode", "tone");
+$("#bleepMode").onchange = () => store.set("bleepMode", $("#bleepMode").value);
+$("#bleepOn").addEventListener("change", () => { if (S.prep) renderCap(); });
 $("#findBtn").onclick = async () => {
   const url = $("#url").value.trim(); if(!url) return $("#url").focus();
   $("#findBtn").disabled = true;
@@ -1665,6 +1697,12 @@ $("#addLine").onclick = () => {
 };
 
 // ---------------------------------------------------------------- style controls
+// Same matching as captions.is_profane on the server (list from clipper/profanity.txt).
+function isProfane(w){
+  const core = String(w).toLowerCase().replace(/[^a-z]/g, ""), pr = S.info && S.info.profanity;
+  return !!(core && pr && (pr.exact.includes(core) || pr.prefix.some(x => core.startsWith(x))));
+}
+const censor = w => String(w).replace(/^([^A-Za-z]*)([A-Za-z])([A-Za-z]*)/, (m, a, b, c) => a + b + "*".repeat(c.length));
 function hex2rgba(h, a){ h = h.replace("#",""); return `rgba(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)},${a})`; }
 function loadStyle(st){
   S.style = {x:50, ...st};
@@ -1752,7 +1790,8 @@ function renderCap(){
   const box = st.box ? `background:${hex2rgba(st.box_color, st.box_opacity/100)};padding:${size*0.12}px ${size*0.2}px;` : "";
   const shadow = st.shadow ? `text-shadow:0 ${size*0.04}px ${size*0.06}px rgba(0,0,0,${0.5*op});` : "";
   const html = line.map((w, i) => {
-    const txt = escapeHtml(st.uppercase ? w.w.toUpperCase() : w.w);
+    const shown = $("#bleepOn").checked && isProfane(w.w) ? censor(w.w) : w.w;
+    const txt = escapeHtml(st.uppercase ? shown.toUpperCase() : shown);
     const on = i === active && st.highlight_mode === "word";
     const hide = anim === "typewriter" && !ghost && i > active ? "visibility:hidden;" : "";
     const col = hex2rgba(on || w.emph ? st.highlight : st.color, op);
@@ -1795,8 +1834,10 @@ $("#makeBtn").onclick = async () => {
       title:S.title || S.clip.title || "", aspect:S.aspect, crop: splitting() ? {...S.crop, face:S.face, split:S.split} : S.crop,
       overlay: S.ov ? {name:S.ov.name, full:S.ov.full, x:S.ov.x, y:S.ov.y, w:S.ov.w, opacity:S.ov.opacity} : null,
       captions:$("#capOn").checked, words, lines, style:S.style, credit:$("#credit").value.trim(),
-      headline:$("#headline").value.trim(), volume:+$("#volume").value}, $("#makeStatus"));
-    $("#result").innerHTML = `<video src="${r.file}" controls playsinline></video><div class="hint">Saved as <b>${escapeHtml(r.name)}</b> in ${escapeHtml(S.info.out_dir)}</div>`;
+      headline:$("#headline").value.trim(), volume:+$("#volume").value,
+      bleep:$("#bleepOn").checked, bleep_mode:$("#bleepMode").value}, $("#makeStatus"));
+    $("#result").innerHTML = `<video src="${r.file}" controls playsinline></video><div class="hint">Saved as <b>${escapeHtml(r.name)}</b> in ${escapeHtml(S.info.out_dir)}</div>` +
+      (r.notes || []).map(n => `<div class="hint">${escapeHtml(n)}</div>`).join("");
   } catch(e) {} finally { $("#makeBtn").disabled = false; }
 };
 $("#openBtn").onclick = () => api("/api/open", {});

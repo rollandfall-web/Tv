@@ -506,7 +506,7 @@ def overlay_chain(base, ov, size):
 
 def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold",
             lines=None, crop=None, on_progress=None, credit=None, headline=None, volume=100,
-            overlay=None):
+            overlay=None, bleeps=None, bleep_mode="tone"):
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
@@ -545,20 +545,34 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
             # Bare file name + cwd avoids ffmpeg's path escaping rules (Windows "C:").
             filters.append("subtitles=captions.ass")
         volume = max(0, min(100, int(volume if volume is not None else 100)))
-        if not filters and volume == 100:
+        bleeps = bleeps if volume > 0 else None     # silent clips need no bleeping
+        if not filters and volume == 100 and not bleeps:
             shutil.move(raw, dest)
             return
         # Original audio: 0 removes it (for adding a song in TikTok/Reels),
         # lower values keep game sound effects quietly under music.
+        maps = []
         if volume == 0:
             audio = ["-an"]
-        elif volume < 100:
-            audio = ["-af", f"volume={volume / 100:.2f}", "-c:a", "aac", "-b:a", "160k"]
         else:
-            audio = ["-c:a", "aac", "-b:a", "160k"]
+            af = [f"volume={volume / 100:.2f}"] if volume < 100 else []
+            if bleeps:
+                # Silence each bad word; for "tone", lay a 1 kHz beep over the same spans.
+                on = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in bleeps)
+                af.append(f"volume=enable='{on}':volume=0")
+            if bleeps and bleep_mode != "mute":
+                graph = (f"[0:a]{','.join(af)}[orig];"
+                         f"sine=frequency=1000:sample_rate=48000,volume=0.3,"
+                         f"volume=enable='not({on})':volume=0[beep];"
+                         f"[orig][beep]amix=inputs=2:duration=first:normalize=0[aout]")
+                audio = ["-filter_complex", graph]
+                maps = ["-map", "0:v:0", "-map", "[aout]"]
+            else:
+                audio = ["-af", ",".join(af)] if af else []
+            audio += ["-c:a", "aac", "-b:a", "160k"]
         video = (["-vf", ",".join(filters), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
                  if filters else ["-c:v", "copy"])
-        run_ffmpeg([ffmpeg, "-y", "-i", os.path.abspath(raw)] + video + audio +
+        run_ffmpeg([ffmpeg, "-y", "-i", os.path.abspath(raw)] + maps + video + audio +
                    ["-movflags", "+faststart", os.path.abspath(dest)], on_progress,
                    local_duration(raw, ffmpeg) if on_progress else None,
                    cwd=os.path.dirname(os.path.abspath(raw)))

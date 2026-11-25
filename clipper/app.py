@@ -202,10 +202,69 @@ def job_find(job, p):
             ffmpeg=ffmpeg, workdir=work,
             count=int(p.get("count") or 5), min_len=float(p.get("min") or 15),
             max_len=float(p.get("max") or 60), use_ai=True, log=job.log, skip_text=fetch,
-            focus=(p.get("focus") or "").strip(), progress=job.span(0, 1))
+            focus=(p.get("focus") or "").strip(), progress=job.span(0, 0.85))
+    try:            # previews are a bonus: never let them block the results
+        job.log("Grabbing preview frames...")
+        add_previews(job, url, local, ffmpeg, picks, progress=job.span(0.85, 1.0))
+    except Exception as err:  # noqa: BLE001
+        job.log(f"No preview frames ({err}).")
     m = finder.LAST_MAP.get(url)
     return {"title": title, "clips": picks,
             "map": m[0] if m else [], "duration": m[1] if m else 0}
+
+
+THUMB_DIR = os.path.join(CACHE_DIR, "thumbs")   # preview frames for found moments
+
+
+def add_previews(job, url, local, ffmpeg, picks, progress=None):
+    """Give each pick 3 small preview frames (15%, 50%, 85% of the clip) as c["thumbs"],
+    so gameplay can be told from menus or talking before a clip is loaded."""
+    if not picks:
+        return
+    if local:
+        src = url
+    else:
+        r = subprocess.run(clip.ytdlp_cmd() + ["--no-playlist", "--no-warnings", "-f",
+                           "bv*[height<=480]/b[height<=480]/wv*/w", "-g", url],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+        links = [l for l in r.stdout.splitlines() if l.startswith("http")]
+        if not links:
+            job.log("No preview frames: couldn't get a low-res link for this video.")
+            return
+        src = links[0]
+    os.makedirs(THUMB_DIR, exist_ok=True)
+    tag = hashlib.md5(url.encode()).hexdigest()[:10]
+    work = []
+    for c in picks:
+        c["thumbs"] = []
+        for j, f in enumerate((0.15, 0.5, 0.85)):
+            name = f"{tag}_{int(c['start'])}_{j}.jpg"
+            t = c["start"] + (c["end"] - c["start"]) * f
+            work.append((c, name, t))
+
+    def grab(item):
+        c, name, t = item
+        out = os.path.join(THUMB_DIR, name)
+        if not (os.path.isfile(out) and os.path.getsize(out) > 0):
+            try:
+                subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", src,
+                                "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "5", out],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+            except subprocess.TimeoutExpired:
+                return item, False
+        return item, os.path.isfile(out) and os.path.getsize(out) > 0
+
+    from concurrent.futures import ThreadPoolExecutor
+    done = 0
+    with ThreadPoolExecutor(max_workers=4) as pool:        # each frame is a network seek
+        for (c, name, _), ok in pool.map(grab, work):
+            if ok:
+                c["thumbs"].append("/thumb/" + name)
+            done += 1
+            if progress:
+                progress(done / len(work))
+    for i, c in enumerate(picks, 1):
+        job.log(f"preview {i}/{len(picks)}: {len(c['thumbs'])} frames")
 
 
 REC_DIR = os.path.join(ROOT, "Recordings")     # live streams recorded here, then clipped
@@ -641,6 +700,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"status": job.status, "log": job.lines[-6:],
                                    "pct": round(job.pct, 4),
                                    "result": job.result, "error": job.error})
+        if path.startswith("/thumb/"):
+            full = self.safe_path(THUMB_DIR, path[len("/thumb/"):])
+            if not full or not full.lower().endswith(".jpg"):
+                return self.send_error(404)
+            return self.send_file(full, "image/jpeg")
         if path.startswith("/overlay/"):
             full = self.safe_path(OVERLAY_DIR, path[len("/overlay/"):])
             ctype = IMAGE_TYPES.get(os.path.splitext(full or "")[1].lower())
@@ -815,6 +879,8 @@ textarea{font:inherit;color:var(--ink);background:var(--soft);border:1px solid v
 .pick .meta{flex:1;min-width:0}
 .pick .t{font-weight:600}
 .pick .r{color:var(--muted);font-size:13px}
+.pick .thumbs{display:flex;gap:4px;margin-top:6px}
+.pick .thumbs img{width:32%;max-width:180px;border-radius:6px;background:#000}
 .editor{display:grid;grid-template-columns:minmax(280px,400px) 1fr;gap:24px;align-items:start}
 @media (max-width:800px){.editor{grid-template-columns:1fr}}
 .stage{display:flex;justify-content:center}
@@ -1295,7 +1361,9 @@ function showPicks(clips){
   if (!clips.length) box.textContent = "No moments found.";
   clips.forEach(c => {
     const d = document.createElement("div"); d.className = "pick";
-    d.innerHTML = `<div class="score">${c.score}</div><div class="meta"><div class="t">${fmtT(c.start)}–${fmtT(c.end)} · ${Math.round(c.end-c.start)}s ${c.title ? "· " + escapeHtml(c.title) : ""}</div><div class="r">${escapeHtml(c.reason)}</div></div>`;
+    d.innerHTML = `<div class="score">${c.score}</div><div class="meta"><div class="t">${fmtT(c.start)}–${fmtT(c.end)} · ${Math.round(c.end-c.start)}s ${c.title ? "· " + escapeHtml(c.title) : ""}</div><div class="r">${escapeHtml(c.reason)}</div>` +
+      (c.thumbs && c.thumbs.length ? `<div class="thumbs">${c.thumbs.map(u => `<img loading="lazy" src="${u}" alt="Preview frame">`).join("")}</div>`
+                                   : `<div class="r">No preview frames</div>`) + `</div>`;
     const b = document.createElement("button"); b.className = "small primary"; b.textContent = "Edit & make";
     b.onclick = () => openEditor(c); d.appendChild(b); box.appendChild(d);
   });

@@ -100,6 +100,11 @@ Location: `/Volumes/Mac Memory Drive/ClipMaker`. Clips save to `ClipMaker/Clips`
 - Long VODs: the first search downloads the stream's audio once (a long
   marathon can take most of an hour); after that, searching the same link is
   instant and a clickable hype map of the whole stream appears.
+- Found moments show **3 preview frames each** (at 15%, 50% and 85% of the clip), so
+  you can tell gameplay from menus or chatting before loading a clip. Frames are cached;
+  if they can't be fetched, the moment shows "No preview frames" and still works.
+- Start it by double-clicking `Clip Maker.command`: it picks a Python that has yt-dlp
+  (Homebrew's newest Python often doesn't, which caused "couldn't find any signal").
 - Videos already on the Mac: the **Upload video** button copies a file (MP4, MOV, MKV,
   WebM) into `Raw/_uploads/` with a progress bar (never overwrites: _2, _3) and loads it
   like a pasted link. Or pick a video already in `Raw/` from the list (no copy), or
@@ -176,6 +181,11 @@ date) and say what's real and what's missing.
 
 Newest first. Claude Code adds a line here with every change it commits.
 
+- Nov 25, 2026: Preview frames under each found moment (3 per moment). `Clip Maker.command`
+  now starts with a Python that has yt-dlp. Tested here on a local file and a web link;
+  still to test on the Mac with a real YouTube and a real Twitch link. Ideas for later
+  (owner's call, not built): flag picks whose frames look like menus, maps or loading
+  screens; a "show 10, I pick 3" mode.
 - Nov 20, 2026: Upload video button and Raw folder picker (with .txt cards and facecam
   pre-fill). Editor preview uses much less CPU; page loads faster.
 - Nov 19, 2026: Merged campaign list committed (private details moved to

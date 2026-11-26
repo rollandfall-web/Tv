@@ -481,12 +481,26 @@ def split_filter(src_w, src_h, aspect="9:16", face=None, split=0.4, x=0.5, y=0.5
     return graph, (out_w, out_h)
 
 
-def overlay_chain(base, ov, size):
-    """Put an image (a streamer's frame, logo or watermark) on top of the video.
+OVERLAY_VIDEO_EXTS = (".mp4", ".mov", ".webm")
+
+# Background removal for overlays: "green" = green screen, "black" = black background.
+OVERLAY_KEYS = {"green": "chromakey=0x00FF00:0.18:0.08",
+                "black": "colorkey=0x000000:0.12:0.08"}
+
+
+def overlay_key(ov):
+    return OVERLAY_KEYS.get(str(ov.get("key") or "none"))
+
+
+def overlay_chain(base, ov, size, source="movie=overlay.png"):
+    """Put an image or a looping logo video (a streamer's frame, logo or watermark)
+    on top of the video.
 
     base: the video filters so far (may be empty); ov: {"full": bool, "x", "y"
-    (centre, % of the frame), "w" (% of the frame width), "opacity" (0-100)};
-    the image must already be copied next to the clip as overlay.png.
+    (centre, % of the frame), "w" (% of the frame width), "opacity" (0-100),
+    "key": "none" | "green" | "black"}. source: where the overlay comes from, either
+    the image copied next to the clip (movie=overlay.png) or a looping video input
+    ([1:v]).
     """
     out_w, out_h = size
     op = max(0, min(100, float(ov.get("opacity", 100)))) / 100
@@ -500,13 +514,20 @@ def overlay_chain(base, ov, size):
         scale = f"scale={w}:-2"
         pos = f"x={x:.4f}*main_w-overlay_w/2:y={y:.4f}*main_h-overlay_h/2"
     alpha = f",colorchannelmixer=aa={op:.2f}" if op < 1 else ""
-    return (f"{base or 'null'}[base];movie=overlay.png,{scale}:flags=lanczos,format=rgba{alpha}[ov];"
-            f"[base][ov]overlay={pos}:format=auto")
+    key = overlay_key(ov)
+    key = f",{key}" if key else ""
+    looping = source.startswith("[")
+    # A looping video never ends: stop with the main clip (shortest=1), restart its clock.
+    head = f"{source}setpts=PTS-STARTPTS," if looping else f"{source},"
+    tail = ":shortest=1" if looping else ""
+    return (f"{base or 'null'}[base];{head}format=rgba{key},{scale}:flags=lanczos{alpha}[ov];"
+            f"[base][ov]overlay={pos}:format=auto{tail}")
 
 
 def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold",
             lines=None, crop=None, on_progress=None, credit=None, headline=None, volume=100,
             overlay=None, bleeps=None, bleep_mode="tone"):
+    extra_in = []          # more inputs after the clip (a looping logo video)
     """Turn the downloaded section into the final file.
 
     words: caption words in clip time, burned in for mp4/vertical output.
@@ -536,8 +557,18 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
         if overlay and overlay.get("file") and os.path.isfile(overlay["file"]):
             # Under the captions, over the picture. Copied next to the clip so the
             # filter needs no path escaping (spaces, Windows drive letters).
-            shutil.copyfile(overlay["file"], os.path.join(os.path.dirname(os.path.abspath(raw)), "overlay.png"))
-            filters = [overlay_chain(",".join(filters), overlay, size)]
+            ext = os.path.splitext(overlay["file"])[1].lower()
+            if ext in OVERLAY_VIDEO_EXTS:
+                # Logo video: loop it for the whole clip. VP9 WebM keeps its alpha only
+                # with the libvpx decoder; ProRes 4444 (.mov) keeps it natively.
+                name = "overlay" + ext
+                shutil.copyfile(overlay["file"], os.path.join(os.path.dirname(os.path.abspath(raw)), name))
+                extra_in = (["-stream_loop", "-1"] + (["-c:v", "libvpx-vp9"] if ext == ".webm" else [])
+                            + ["-i", name])
+                filters = [overlay_chain(",".join(filters), overlay, size, source="[1:v]")]
+            else:
+                shutil.copyfile(overlay["file"], os.path.join(os.path.dirname(os.path.abspath(raw)), "overlay.png"))
+                filters = [overlay_chain(",".join(filters), overlay, size)]
         if (words or credit or headline) and has_captions_support(ffmpeg):
             import captions
             ass = os.path.join(os.path.dirname(os.path.abspath(raw)), "captions.ass")
@@ -551,28 +582,37 @@ def convert(raw, dest, kind, ffmpeg, gif_width, gif_fps, words=None, style="bold
             return
         # Original audio: 0 removes it (for adding a song in TikTok/Reels),
         # lower values keep game sound effects quietly under music.
-        maps = []
-        if volume == 0:
-            audio = ["-an"]
-        else:
+        # Audio: 0 removes it (for adding a song in TikTok/Reels), lower values keep
+        # game sound effects quietly under music; bad words are silenced or bleeped.
+        agraph, af = None, []
+        if volume > 0:
             af = [f"volume={volume / 100:.2f}"] if volume < 100 else []
             if bleeps:
-                # Silence each bad word; for "tone", lay a 1 kHz beep over the same spans.
                 on = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in bleeps)
                 af.append(f"volume=enable='{on}':volume=0")
             if bleeps and bleep_mode != "mute":
-                graph = (f"[0:a]{','.join(af)}[orig];"
-                         f"sine=frequency=1000:sample_rate=48000,volume=0.3,"
-                         f"volume=enable='not({on})':volume=0[beep];"
-                         f"[orig][beep]amix=inputs=2:duration=first:normalize=0[aout]")
-                audio = ["-filter_complex", graph]
-                maps = ["-map", "0:v:0", "-map", "[aout]"]
+                agraph = (f"[0:a]{','.join(af)}[orig];"
+                          f"sine=frequency=1000:sample_rate=48000,volume=0.3,"
+                          f"volume=enable='not({on})':volume=0[beep];"
+                          f"[orig][beep]amix=inputs=2:duration=first:normalize=0[aout]")
+        acodec = ["-an"] if volume == 0 else ["-c:a", "aac", "-b:a", "160k"]
+        vcodec = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"] if filters else ["-c:v", "copy"]
+        if extra_in or agraph:
+            # Several inputs or a mixed sound: one combined filter graph.
+            parts, maps = [], []
+            if filters:
+                parts.append(f"[0:v]{','.join(filters)}[vout]")
+                maps += ["-map", "[vout]"]
             else:
-                audio = ["-af", ",".join(af)] if af else []
-            audio += ["-c:a", "aac", "-b:a", "160k"]
-        video = (["-vf", ",".join(filters), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
-                 if filters else ["-c:v", "copy"])
-        run_ffmpeg([ffmpeg, "-y", "-i", os.path.abspath(raw)] + maps + video + audio +
+                maps += ["-map", "0:v:0"]
+            if volume > 0:
+                parts.append(agraph or f"[0:a]{','.join(af) or 'anull'}[aout]")
+                maps += ["-map", "[aout]"]
+            args = ["-filter_complex", ";".join(parts)] + maps + vcodec + acodec
+        else:
+            args = (["-vf", ",".join(filters)] if filters else []) + vcodec
+            args += (["-af", ",".join(af)] if af else []) + acodec
+        run_ffmpeg([ffmpeg, "-y", "-i", os.path.abspath(raw)] + extra_in + args +
                    ["-movflags", "+faststart", os.path.abspath(dest)], on_progress,
                    local_duration(raw, ffmpeg) if on_progress else None,
                    cwd=os.path.dirname(os.path.abspath(raw)))
@@ -785,8 +825,11 @@ def main():
                      help="how much of the height the camera takes, 20-60 (default: 40)")
     ovl = p.add_argument_group("overlay image (a streamer's frame, logo or watermark)")
     ovl.add_argument("--overlay", metavar="FILE",
-                     help="a PNG (transparent background works) put on top of the video. "
+                     help="a PNG (transparent background works) or a logo video (MP4, MOV, WebM; "
+                          "loops for the whole clip) put on top of the video. "
                           "Without --overlay-pos it covers the whole frame (for full-size frames)")
+    ovl.add_argument("--overlay-key", choices=("none", "green", "black"), default="none",
+                     help="remove the overlay's background: green screen or black (default: none)")
     ovl.add_argument("--overlay-pos", metavar="X,Y,W",
                      help='where it goes, in percent: centre left-right, centre top-bottom, width. '
                           'e.g. "50,10,40" = centred near the top, 40%% wide')
@@ -811,7 +854,8 @@ def main():
     if a.overlay:
         if not os.path.isfile(a.overlay):
             p.error(f"overlay image not found: {a.overlay}")
-        overlay = {"file": os.path.abspath(a.overlay), "full": True, "opacity": a.overlay_opacity}
+        overlay = {"file": os.path.abspath(a.overlay), "full": True, "opacity": a.overlay_opacity,
+                   "key": a.overlay_key}
         if a.overlay_pos:
             try:
                 ox, oy, ow = [float(v) for v in a.overlay_pos.replace(" ", "").split(",")]

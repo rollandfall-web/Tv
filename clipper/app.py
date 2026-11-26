@@ -74,26 +74,53 @@ if not os.path.isdir(os.path.dirname(OUT_DIR.rstrip("/\\")) or "."):
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "clipmaker_cache")
 OVERLAY_DIR = os.path.join(ROOT, "Overlays")      # images people upload for overlays
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+OVERLAY_VIDEO_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm"}
+OVERLAY_TYPES = {**IMAGE_TYPES, **OVERLAY_VIDEO_TYPES}
 
 
 def save_overlay(name, data_url):
-    """Store an uploaded overlay image; returns its file name in OVERLAY_DIR."""
+    """Store an uploaded overlay image or logo video; returns its file name in OVERLAY_DIR."""
     import base64
     ext = os.path.splitext(str(name or ""))[1].lower()
-    if ext not in IMAGE_TYPES:
-        raise RuntimeError("Overlays must be PNG, JPG or WebP images.")
+    if ext not in OVERLAY_TYPES:
+        raise RuntimeError("Overlays must be PNG, JPG or WebP images, or MP4, MOV or WebM logo videos.")
     try:
         raw = base64.b64decode(str(data_url).split(",", 1)[-1], validate=False)
     except ValueError:
-        raise RuntimeError("That image couldn't be read.")
-    if not raw or len(raw) > 20 * 1024 * 1024:
-        raise RuntimeError("The image must be under 20 MB.")
+        raise RuntimeError("That file couldn't be read.")
+    limit = 100 if ext in OVERLAY_VIDEO_TYPES else 20
+    if not raw or len(raw) > limit * 1024 * 1024:
+        raise RuntimeError(f"The overlay must be under {limit} MB.")
     os.makedirs(OVERLAY_DIR, exist_ok=True)
     base = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.splitext(os.path.basename(name))[0])[:60] or "overlay"
     fname = base + ext
     with open(os.path.join(OVERLAY_DIR, fname), "wb") as fh:
         fh.write(raw)
     return fname
+
+
+def overlay_preview(name, key):
+    """A PNG of the overlay as it will look (one frame of a logo video, background
+    removed) for the editor preview. Browsers can't play ProRes .mov or key out green."""
+    src = os.path.join(OVERLAY_DIR, os.path.basename(str(name or "")))
+    ext = os.path.splitext(src)[1].lower()
+    if not os.path.isfile(src) or ext not in OVERLAY_TYPES:
+        return None
+    key = key if key in clip.OVERLAY_KEYS else "none"
+    folder = os.path.join(OVERLAY_DIR, "_previews")
+    os.makedirs(folder, exist_ok=True)
+    out = os.path.join(folder, f"{os.path.splitext(os.path.basename(src))[0]}{ext.replace('.', '_')}.{key}.png")
+    if os.path.isfile(out) and os.path.getmtime(out) >= os.path.getmtime(src):
+        return out
+    vf = "format=rgba" + ("," + clip.OVERLAY_KEYS[key] if key != "none" else "") + ",scale='min(720,iw)':-2"
+    dec = ["-c:v", "libvpx-vp9"] if ext == ".webm" else []
+    ffmpeg = clip.find_ffmpeg()
+    for seek in (["-ss", "0.5"], []):      # a frame just after the start (logos often fade in)
+        subprocess.run([ffmpeg, "-y", "-loglevel", "error"] + seek + dec + ["-i", src, "-frames:v", "1",
+                        "-vf", vf, out], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        if os.path.isfile(out) and os.path.getsize(out) > 0:
+            return out
+    return None
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -715,6 +742,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(body)
         if path == "/api/info":
             return self.send_json(info())
+        if path == "/api/ovpreview":
+            from urllib.parse import parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            out = overlay_preview((q.get("name") or [""])[0], (q.get("key") or ["none"])[0])
+            if not out:
+                return self.send_error(404)
+            return self.send_file(out, "image/png")
         if path == "/api/raw":
             return self.send_json({"root": RAW_DIR, "files": list_raw()})
         if path.startswith("/api/job/"):
@@ -731,7 +765,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(full, "image/jpeg")
         if path.startswith("/overlay/"):
             full = self.safe_path(OVERLAY_DIR, path[len("/overlay/"):])
-            ctype = IMAGE_TYPES.get(os.path.splitext(full or "")[1].lower())
+            ctype = OVERLAY_TYPES.get(os.path.splitext(full or "")[1].lower())
             if not full or not ctype:
                 return self.send_error(404)
             return self.send_file(full, ctype)
@@ -821,7 +855,9 @@ class Handler(BaseHTTPRequestHandler):
                 name = save_overlay(p.get("name"), p.get("data"))
             except RuntimeError as err:
                 return self.send_json({"error": str(err)}, 400)
-            return self.send_json({"name": name, "url": "/overlay/" + name})
+            w, h = clip.video_size(os.path.join(OVERLAY_DIR, name), clip.find_ffmpeg())
+            return self.send_json({"name": name, "url": "/overlay/" + name, "width": w, "height": h,
+                                   "video": name.lower().endswith(tuple(OVERLAY_VIDEO_TYPES))})
         if path == "/api/open":
             open_folder(RAW_DIR if p.get("folder") == "raw" else None)
             return self.send_json({"ok": True})
@@ -1130,10 +1166,16 @@ details.more>summary{cursor:pointer;font-size:13px;color:var(--muted)}
 
         <details class="grp" id="ovGrp">
           <summary><b>Overlay</b><span>A streamer's frame, logo or watermark, only if they require it</span></summary>
-          <div class="row" style="margin-bottom:6px"><input id="ovFile" type="file" accept="image/png,image/jpeg,image/webp" style="flex:1;min-width:0"><button class="small hidden" id="ovClear">Remove</button></div>
-          <p class="hint" style="margin:-2px 0 8px">A PNG with a see-through background works best. Remembered for your next clips; Remove takes it off.</p>
+          <div class="row" style="margin-bottom:6px"><input id="ovFile" type="file" accept="image/png,image/jpeg,image/webp,.mp4,.mov,.webm,video/mp4,video/quicktime,video/webm" style="flex:1;min-width:0"><button class="small hidden" id="ovClear">Remove</button></div>
+          <p class="hint" style="margin:-2px 0 8px">A PNG with a see-through background, or a logo video (MP4, MOV, WebM) that loops for the whole clip. Green-screen or black-background logos: pick "Remove background" below. Remembered for your next clips; Remove takes it off.</p>
           <div id="ovCtl" class="hidden">
             <label class="chk"><input id="ovFull" type="checkbox"> Cover the whole frame (for full-size frames)</label>
+            <div class="ctl"><label for="ovKey">Remove background</label><select id="ovKey">
+              <option value="none">None (keep as is, or its own transparency)</option>
+              <option value="green">Green screen</option>
+              <option value="black">Black background</option>
+            </select><span></span></div>
+            <p class="hint" id="ovVidNote" style="margin:-2px 0 6px"></p>
             <div class="ctl"><label>Size</label><input id="ovsize" type="range" min="5" max="100" step="1" value="30"><output></output></div>
             <div class="ctl"><label>See-through</label><input id="ov_opacity" type="range" min="10" max="100" step="5" value="100"><output></output></div>
             <p class="hint" style="margin:-2px 0 0">Drag the overlay on the video to move it. 100% = solid.</p>
@@ -1510,7 +1552,12 @@ function renderOverlay(){
   $("#ovCtl").classList.toggle("hidden", !ov); $("#ovClear").classList.toggle("hidden", !ov);
   if (ov) $("#ovGrp").open = true;
   if (!ov) { img.style.display = "none"; return; }
-  if (img.getAttribute("src") !== ov.url) img.src = ov.url;
+  // Logo videos and keyed images preview as a server-made PNG (one frame, background removed).
+  const key = ov.key || "none";
+  const src = (ov.video || key !== "none") ? `/api/ovpreview?name=${encodeURIComponent(ov.name)}&key=${key}&t=${ov.t || 0}` : ov.url;
+  if (img.getAttribute("src") !== src) img.src = src;
+  $("#ovKey").value = key;
+  $("#ovVidNote").textContent = ov.video ? "Logo video: it loops for the whole clip. The preview shows one frame of it." : "";
   img.style.display = "block"; img.style.opacity = ov.opacity / 100;
   img.classList.toggle("full", !!ov.full); img.classList.toggle("movable", !ov.full);
   img.style.left = ov.x + "%"; img.style.top = ov.y + "%"; img.style.width = ov.w + "%"; img.style.height = "auto";
@@ -1523,16 +1570,15 @@ $("#ovFile").onchange = () => {
   rd.onload = async () => {
     const r = await api("/api/overlay", {name:f.name, data:rd.result});
     if (r.error) { alert(r.error); return; }
-    const im = new Image();
-    im.onload = () => {   // a picture the shape of the clip is a full frame; anything else a logo
-      const full = Math.abs(im.width / im.height - RATIO[S.aspect]) < 0.03;
-      S.ov = {name:r.name, url:r.url + "?t=" + Date.now(), full, x:50, y:full ? 50 : 12, w:full ? 100 : 30, opacity:100};
-      saveOv();
-    };
-    im.src = r.url + "?t=" + Date.now();
+    // A file the shape of the clip is a full frame; anything else a logo.
+    const full = r.width > 0 && Math.abs(r.width / r.height - RATIO[S.aspect]) < 0.03, t = Date.now();
+    S.ov = {name:r.name, url:r.url + "?t=" + t, t, video:!!r.video, key:"none",
+            full, x:50, y:full ? 50 : 12, w:full ? 100 : 30, opacity:100};
+    saveOv();
   };
   rd.readAsDataURL(f);
 };
+$("#ovKey").onchange = () => { if (S.ov) { S.ov.key = $("#ovKey").value; saveOv(); } };
 $("#ovClear").onclick = () => { S.ov = null; $("#ovFile").value = ""; saveOv(); };
 $("#ovFull").onchange = () => { if (S.ov) { S.ov.full = $("#ovFull").checked; if (!S.ov.full && S.ov.w > 90) S.ov.w = 30; saveOv(); } };
 $("#ovsize").oninput = () => { if (S.ov) { S.ov.w = +$("#ovsize").value; saveOv(); } };
@@ -1832,7 +1878,7 @@ $("#makeBtn").onclick = async () => {
     const r = await runJob("/api/make", {url:$("#url").value.trim(), browser:$("#browser").value,
       sec_start:S.prep.sec_start, sec_end:S.prep.sec_end, cut_in:S.cut[0], cut_out:S.cut[1],
       title:S.title || S.clip.title || "", aspect:S.aspect, crop: splitting() ? {...S.crop, face:S.face, split:S.split} : S.crop,
-      overlay: S.ov ? {name:S.ov.name, full:S.ov.full, x:S.ov.x, y:S.ov.y, w:S.ov.w, opacity:S.ov.opacity} : null,
+      overlay: S.ov ? {name:S.ov.name, full:S.ov.full, x:S.ov.x, y:S.ov.y, w:S.ov.w, opacity:S.ov.opacity, key:S.ov.key || "none"} : null,
       captions:$("#capOn").checked, words, lines, style:S.style, credit:$("#credit").value.trim(),
       headline:$("#headline").value.trim(), volume:+$("#volume").value,
       bleep:$("#bleepOn").checked, bleep_mode:$("#bleepMode").value}, $("#makeStatus"));

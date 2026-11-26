@@ -120,11 +120,15 @@ Location: `/Volumes/Mac Memory Drive/ClipMaker`. Clips save to `ClipMaker/Clips`
 - Editor: 9:16 / 4:5 / 1:1 / 16:9, drag and zoom framing, "Facecam on top, game
   below", trim, captions you can edit and drag, caption animations, streamer
   handle text, title text, clip sound volume (0% for music campaigns), overlay
-  image (only when a campaign requires it).
+  (only when a campaign requires it): a PNG/JPG/WebP image or a **logo video** (MP4, MOV,
+  WebM) that loops for the whole clip, placed and sized the same way. "Remove background":
+  None, Green screen, or Black background. Transparent ProRes 4444 .mov and VP9 .webm keep
+  their transparency with None. The editor preview shows one frame of a logo video with the
+  background removed.
 - Command line: `python3 clipper/clip.py --help`. Useful:
   `--auto --list --focus "funny"`, `--clips "41-63"`, `--vertical --captions`,
   `--credit "twitch.tv/NAME"`, `--headline "Line one | line two"`, `--mute`,
-  `--face "75,0,25,30"` (camera box, % of the source), `--overlay FILE.png`,
+  `--face "75,0,25,30"` (camera box, % of the source), `--overlay FILE.png|.mp4|.mov|.webm` (`--overlay-key green|black`),
   `--browser chrome` (sign-in for age-restricted or Twitch).
 - Update to the newest version (keeps clips, settings and everything in `Outreach/`):
   ```
@@ -190,6 +194,10 @@ date) and say what's real and what's missing.
 
 Newest first. Claude Code adds a line here with every change it commits.
 
+- Nov 26, 2026: Logo video overlays (MP4, MOV, WebM, looping for the whole clip) with
+  background removal (green screen or black), for images too; transparent ProRes 4444 and
+  VP9 WebM supported. Command line: `--overlay-key`. Tested here with green-screen,
+  black-background, ProRes 4444 and VP9 alpha logos on a 9:16 clip.
 - Nov 25, 2026: "Bleep profanity" option in the editor (bleep tone or mute, captions show
   f***, word list in clipper/profanity.txt). Update steps now re-add the run permission to
   the .command launchers after unzipping.
